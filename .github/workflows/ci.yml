@@ -1,0 +1,86 @@
+# CI for orion-xtend-cli.
+#
+# The editable install is not optional: tests/test_validate_pin_matches.py reads
+# distribution metadata to assert the core pin, and skips (loudly) without it. A CI run
+# that skips the pin check is a CI run that cannot catch pin drift.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install ruff==0.8.4
+      - run: ruff check src tests
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # The pinned core wheel is published from orion-knowledge-hive. Until it is on
+      # an index, CI installs it from the sibling repo at the pinned ref — checked out
+      # explicitly so the failure mode is "core ref not found", not a silently older
+      # manifest contract.
+      - name: Check out core (for the vendored kernel modules)
+        uses: actions/checkout@v4
+        with:
+          repository: AI3XTechnologies/orion-knowledge-hive
+          ref: ${{ vars.CORE_REF || 'main' }}
+          path: .core
+          token: ${{ secrets.CORE_READ_TOKEN }}
+
+      - name: Install
+        run: |
+          pip install ./.core/backend
+          pip install -e '.[dev]'
+
+      - name: Assert the pin check actually ran
+        run: |
+          # A skipped pin test looks green. Fail if it did not execute.
+          pytest tests/test_validate_pin_matches.py -q --no-header -rs \
+            | tee /tmp/pin.txt
+          if grep -q "skipped" /tmp/pin.txt; then
+            echo "::error::pin tests skipped — core wheel or oxtend not installed"
+            exit 1
+          fi
+
+      - name: Test
+        # cosign/docker-dependent tests are deselected here and covered by the
+        # release job, which has both.
+        run: pytest -q -m "not requires_cosign and not requires_docker"
+
+  cosign-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: sigstore/cosign-installer@v3
+      - uses: actions/checkout@v4
+        with:
+          repository: AI3XTechnologies/orion-knowledge-hive
+          ref: ${{ vars.CORE_REF || 'main' }}
+          path: .core
+          token: ${{ secrets.CORE_READ_TOKEN }}
+      - run: |
+          pip install ./.core/backend
+          pip install -e '.[dev]'
+      - name: Sign/verify round-trip against a real cosign
+        run: pytest -q -m requires_cosign

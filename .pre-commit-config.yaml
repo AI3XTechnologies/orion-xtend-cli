@@ -1,0 +1,36 @@
+# Pre-commit hooks for orion-xtend-cli.
+#
+# Install once per clone:
+#   pip install pre-commit
+#   pre-commit install -t commit-msg
+#
+# Mirrors orion-knowledge-hive/.pre-commit-config.yaml — same allowed types, so a
+# contributor moving between repos does not have to learn a second convention.
+
+repos:
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.4.0
+    hooks:
+      - id: conventional-pre-commit
+        name: Conventional Commits message lint
+        stages: [commit-msg]
+        args:
+          - --strict
+          - --
+          - feat
+          - fix
+          - chore
+          - docs
+          - refactor
+          - test
+          - build
+          - ci
+          - perf
+          - style
+          - revert
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [--fix]

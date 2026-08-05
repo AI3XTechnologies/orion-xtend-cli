@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oxtend"
+version = "0.1.0"
+description = "Orion Xtend bundle CLI — validate, build, contract-test, sign, package, push"
+requires-python = ">=3.13"
+authors = [{ name = "AI3X Technologies" }]
+readme = "README.md"
+dependencies = [
+    "click>=8.1.0",
+    "pyyaml>=6.0.0",
+    # The manifest contract and the scoped-migration gate are VENDORED from core,
+    # not reimplemented (SPEC-67 §5.1, ORION-688 task 2). Pinned to a range;
+    # tests/test_validate_pin_matches.py asserts the installed version is inside
+    # it, and the core repo carries the mirror-image assertion. A pin only one
+    # side checks is a pin that drifts.
+    "orion-backend>=0.7.0,<1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.8.0",
+]
+
+[project.scripts]
+oxtend = "oxtend.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+testpaths = ["tests"]
+markers = [
+    "requires_cosign: needs a real cosign binary on PATH",
+    "requires_docker: needs a container CLI and a reachable registry",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

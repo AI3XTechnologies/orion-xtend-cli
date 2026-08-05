@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "include-component-in-tag": false,
+  "separate-pull-requests": false,
+  "draft": false,
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "oxtend",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}
