@@ -16,7 +16,7 @@ Orion Xtend kernel installs. It is the only supported way to produce a bundle, a
 the gate that stops an extension being published against a core it cannot run on.
 
 Derived from SPEC-67 §5.1 (the manifest contract) and §7.1 (the install lifecycle). The
-reference implementation is `Orion Xtend/tools/oxtend-cli/oxtend.py` (231 lines), whose
+reference implementation is `poc/tools/oxtend-cli/oxtend.py` (231 lines), whose
 own docstring lists contract tests, cosign signing, and a lockfile as
 "production would add these" — this spec is those three plus the correction that the CLI
 must not own any validation rule.

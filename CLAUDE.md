@@ -31,7 +31,7 @@ scoped-migration gate are imported from the pinned `orion-backend` wheel via
 | Supported field types | `orion.kernel.fields.FIELD_TYPES` | direct import in `contract_test.py` |
 | Core event topics | `orion.kernel.events.CORE_TOPICS` | direct import in `contract_test.py` |
 
-The reference CLI (`Orion Xtend/tools/oxtend-cli/oxtend.py`) duplicated the scope regex
+The reference CLI (`poc/tools/oxtend-cli/oxtend.py`) duplicated the scope regex
 and the migration gate. That is the worst possible split for a build tool: CI passes,
 install fails, and the error surfaces on a customer's cluster.
 `tests/test_validate_delegates.py` scans this repo's source for duplicated rules and
