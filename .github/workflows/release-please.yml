@@ -7,6 +7,17 @@ on:
   # are cleared outside git — an untagged merged release PR, a stale label — and
   # without this the only way to retry was to push something.
   workflow_dispatch:
+    inputs:
+      publish_version:
+        # Recovery path. The publish job is gated on release-please reporting a
+        # release, so if a tag ends up created any other way the artefacts for it
+        # can never be built — the wheel, the image and its signature would simply
+        # not exist for a version the registry is expected to serve. Passing a
+        # version here builds and publishes that tag's artefacts directly.
+        description: "Build and publish artefacts for an existing tag (e.g. 0.1.0). Leave empty for a normal run."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -39,10 +50,18 @@ jobs:
 
   publish:
     needs: release-please
-    if: needs.release-please.outputs.released == 'true'
+    if: needs.release-please.outputs.released == 'true' || inputs.publish_version != ''
     runs-on: ubuntu-latest
+    env:
+      # One source of truth for the version, so the wheel, the image tag and the
+      # signature cannot disagree about which release they belong to.
+      VERSION: ${{ needs.release-please.outputs.version || inputs.publish_version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # On the recovery path check out the tag, not the branch: main may have
+          # moved on, and the artefacts must be built from what the tag names.
+          ref: ${{ inputs.publish_version != '' && format('v{0}', inputs.publish_version) || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -64,7 +83,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/ai3xtechnologies/oxtend:${{ needs.release-please.outputs.version }}
+            ghcr.io/ai3xtechnologies/oxtend:${{ env.VERSION }}
             ghcr.io/ai3xtechnologies/oxtend:latest
 
       - uses: sigstore/cosign-installer@v3
@@ -73,9 +92,9 @@ jobs:
         # unsigned.
         run: |
           cosign sign --yes \
-            ghcr.io/ai3xtechnologies/oxtend:${{ needs.release-please.outputs.version }}
+            ghcr.io/ai3xtechnologies/oxtend:${{ env.VERSION }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: oxtend-wheel-${{ needs.release-please.outputs.version }}
+          name: oxtend-wheel-${{ env.VERSION }}
           path: dist/*
