@@ -24,7 +24,14 @@ def manifest() -> dict[str, Any]:
         "version": "1.0.0",
         "core": {"api": "v1", "compat": ">=0.1,<2.0"},
         "capabilities": {
-            "events": {"emit": ["x_fixture.thing.happened"], "subscribe": ["core.document.created"]}
+            # Must be a topic core actually emits, or every contract test built on this
+            # fixture fails the topics check. `core.document.created` sat here until
+            # ORION-704's follow-up retired it from CORE_TOPICS — it had no producer and
+            # no handler, the dead-mechanism shape this migration exists to remove. The
+            # real bundles were all updated then; this fixture was missed, and CI could
+            # not catch it because the job that runs these tests has never checked out
+            # core (no CORE_READ_TOKEN), so it has never run.
+            "events": {"emit": ["x_fixture.thing.happened"], "subscribe": ["core.collection.swapped"]}
         },
     }
 
