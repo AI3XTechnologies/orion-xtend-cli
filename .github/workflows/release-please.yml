@@ -3,6 +3,10 @@ name: release-please
 on:
   push:
     branches: [main]
+  # Re-runnable without an empty commit. release-please aborts on conditions that
+  # are cleared outside git — an untagged merged release PR, a stale label — and
+  # without this the only way to retry was to push something.
+  workflow_dispatch:
 
 permissions:
   contents: write
