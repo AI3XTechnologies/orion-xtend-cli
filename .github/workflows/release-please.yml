@@ -71,6 +71,22 @@ jobs:
           pip install build
           python -m build
 
+      # The image cannot resolve orion-backend from any index — it is private and
+      # published nowhere. Core is checked out and wheeled into the build context so
+      # the Dockerfile has something to install. Same shape orion-client-dilmah's CI
+      # already uses; without it the image build fails on dependency resolution.
+      - name: Check out core (for the vendored kernel modules)
+        uses: actions/checkout@v4
+        with:
+          repository: AI3XTechnologies/orion-knowledge-hive
+          ref: v2
+          path: .core
+          token: ${{ secrets.CORE_READ_TOKEN }}
+          fetch-depth: 1
+
+      - name: Wheel core into the image build context
+        run: pip wheel --no-deps --wheel-dir core-dist ./.core/backend
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io

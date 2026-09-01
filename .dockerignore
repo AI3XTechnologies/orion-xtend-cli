@@ -1,0 +1,21 @@
+# .core is a full checkout of orion-knowledge-hive that the publish workflow makes
+# only so core's wheel can be built from it. Sending it to the daemon would put the
+# entire core repository in the build context for a file the build never reads.
+#
+# core-dist/ is deliberately NOT ignored — it holds that wheel, and the Dockerfile
+# installs from it. orion-backend is private and on no index, so without it the
+# image cannot resolve its own dependency.
+.core/
+
+.git/
+.github/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+tests/

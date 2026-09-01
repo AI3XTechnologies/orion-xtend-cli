@@ -10,3 +10,7 @@ dist/
 # cosign key material must never be committed — see CONTRIBUTING §3.
 *.key
 cosign.pub
+
+# Build scratch: core checkout and the wheel built from it (see .dockerignore)
+.core/
+core-dist/
