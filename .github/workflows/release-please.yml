@@ -21,6 +21,15 @@ jobs:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
+          # A PAT, not GITHUB_TOKEN. This org forbids GitHub Actions from creating
+          # pull requests, and release-please's whole loop depends on opening its own
+          # PR and then parsing the body it generated to decide what to release. With
+          # GITHUB_TOKEN it updated the release branch and then died on PR creation,
+          # and a hand-made PR merged without releasing anything — the run rejects it
+          # with "Pull request body did not match". A PAT is not subject to that
+          # restriction, so the PR is created as a user and the loop closes.
+          # Falls back to GITHUB_TOKEN so a fork without the secret still runs.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
