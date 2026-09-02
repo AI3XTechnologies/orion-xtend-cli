@@ -78,8 +78,8 @@ jobs:
       - name: Check out core (for the vendored kernel modules)
         uses: actions/checkout@v4
         with:
-          repository: AI3XTechnologies/orion-knowledge-hive
-          ref: v2
+          repository: AI3XTechnologies/orion-core
+          ref: main
           path: .core
           token: ${{ secrets.CORE_READ_TOKEN }}
           fetch-depth: 1

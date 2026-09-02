@@ -33,14 +33,14 @@ jobs:
         with:
           python-version: "3.13"
 
-      # The pinned core wheel is published from orion-knowledge-hive. Until it is on
+      # The pinned core wheel is published from orion-core. Until it is on
       # an index, CI installs it from the sibling repo at the pinned ref — checked out
       # explicitly so the failure mode is "core ref not found", not a silently older
       # manifest contract.
       - name: Check out core (for the vendored kernel modules)
         uses: actions/checkout@v4
         with:
-          repository: AI3XTechnologies/orion-knowledge-hive
+          repository: AI3XTechnologies/orion-core
           ref: ${{ vars.CORE_REF || 'main' }}
           path: .core
           token: ${{ secrets.CORE_READ_TOKEN }}
@@ -75,7 +75,7 @@ jobs:
       - uses: sigstore/cosign-installer@v3
       - uses: actions/checkout@v4
         with:
-          repository: AI3XTechnologies/orion-knowledge-hive
+          repository: AI3XTechnologies/orion-core
           ref: ${{ vars.CORE_REF || 'main' }}
           path: .core
           token: ${{ secrets.CORE_READ_TOKEN }}
