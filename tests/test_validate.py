@@ -129,3 +129,45 @@ def test_client_bundle_validates(make_source, manifest) -> None:
     result = validate_bundle(make_source(client))
     assert result.ok, result.errors
     assert result.kind == "client"
+
+
+def test_a_bundle_with_both_fields_and_access_validates(make_source, manifest) -> None:
+    """Regression pin for D-107 — the two-directory path had never executed.
+
+    `_validate_metadata_yaml` loops over `metadata/fields` then `metadata/access`. It
+    used to bind the vendored kernel module to a local and `del` it at the end of the
+    loop *body*, so the second iteration raised `UnboundLocalError` and the traceback
+    replaced the validation report entirely.
+
+    It survived because no bundle shipped both directories: `x_orion_email` has fields
+    and dropped its access key, `x_orion_dataaccess` declares access with no `metadata/`
+    directory at all, and the clients ship neither. The first bundle that had both
+    (`x_demo`, the install probe) hit it on the first command ever run against it.
+
+    So this test is deliberately about the *combination* rather than about either
+    directory — each alone already passed, which is exactly why the bug was invisible.
+    """
+    source = make_source(
+        {
+            **manifest,
+            "provides": [
+                {"knowledge-hive/fields": {"dir": "metadata/fields"}},
+                {"knowledge-hive/access": {"dir": "metadata/access"}},
+            ],
+        },
+        fields={
+            "marker.field.yaml": {
+                "entity": "knowledge-hive/chunks",
+                "field": {"name": "marker", "type": "string", "indexed": True},
+            }
+        },
+        access={
+            "visibility.rule.yaml": {
+                "entity": "knowledge-hive/chunks",
+                "rule": "visibility",
+                "condition": {"predicates": [{"op": "eq", "attr": "marker", "value": "x"}]},
+            }
+        },
+    )
+    result = validate_bundle(source)
+    assert result.ok, result.errors

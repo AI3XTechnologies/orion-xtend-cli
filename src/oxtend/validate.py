@@ -38,7 +38,14 @@ def _validate_metadata_yaml(ext_dir: Path, result: ValidationResult) -> None:
     """Every declarative YAML must parse, and must parse into the shape the kernel
     will later demand — a file that is valid YAML but missing `entity` would
     otherwise fail at install rather than at build."""
-    manifest_mod = kernel_manifest_module()
+    # Called for its side effect: it raises if the pinned core wheel is absent, which is
+    # exit code 2 (tooling) rather than 1 (the bundle is wrong). The return value is
+    # deliberately unused — the per-file checks below import the specific kernel
+    # functions they need. It used to be bound to a name and `del`d at the end of the
+    # loop body, which raised UnboundLocalError on the *second* iteration for any bundle
+    # shipping both `metadata/fields` and `metadata/access`; no bundle did until x_demo,
+    # so `oxtend validate` had never been run against that combination.
+    kernel_manifest_module()
     for subdir, parser in (
         ("metadata/fields", "fields"),
         ("metadata/access", "access"),
@@ -65,7 +72,6 @@ def _validate_metadata_yaml(ext_dir: Path, result: ValidationResult) -> None:
                         result.errors.append(f"{path}: rule declares no `entity`")
             except Exception as exc:  # noqa: BLE001 — surfaced as a validation error
                 result.errors.append(f"{path}: {exc}")
-        del manifest_mod  # only imported to assert the vendored wheel is present
 
 
 def _validate_migrations(ext_dir: Path, scope: str, result: ValidationResult) -> None:
