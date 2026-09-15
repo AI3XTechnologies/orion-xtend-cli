@@ -1,5 +1,6 @@
 """The `oxtend` command line (SPEC-67 §5.1, ORION-688).
 
+    oxtend add-field     <ext_dir> --entity E --name N --type T [ui options]
     oxtend validate      <ext_dir>
     oxtend build         <ext_dir> [--out DIR] [--require-lock]
     oxtend contract-test <ext_dir> --core-version X.Y.Z [--openapi FILE]
@@ -221,6 +222,90 @@ def run_all(
         ctx.invoke(sign, ext_dir=ext_dir, bundle_dir=None, key=key)
     ctx.invoke(package, ext_dir=ext_dir, registry=registry, bundle_dir=None)
     ctx.invoke(push, ext_dir=ext_dir, registry=registry, bundle_dir=None, allow_unsigned=allow_unsigned)
+
+
+@cli.command(name="add-field")
+@click.argument("ext_dir", type=_DIR)
+@click.option("--entity", required=True, help="Core entity: collections, documents, chunks.")
+@click.option("--name", required=True, help="Field name — lower snake_case, scope-prefixed.")
+@click.option(
+    "--type", "field_type", default="string",
+    help="string|int|float|bool|date|enum|string[].",
+)
+@click.option("--enum-values", default=None, help="Comma-separated values (for --type enum).")
+@click.option("--required", is_flag=True, help="Reject a write that omits this field.")
+@click.option("--indexed", is_flag=True, help="Create an index so the field is filter-fast.")
+@click.option("--max-length", type=int, default=None, help="Max length (string / string[] only).")
+@click.option("--label", default=None, help="UI label — its presence makes the field UI-visible.")
+@click.option("--group", default="Custom", help="UI group heading (with --label).")
+@click.option("--order", type=int, default=0, help="UI sort order in the group (with --label).")
+@click.option(
+    "--editor", default=None,
+    help="text|textarea|number|boolean|datetime|select|list_chips.",
+)
+@click.option("--list-column", is_flag=True, help="Show as a list-view column (with --label).")
+@click.option("--filterable", is_flag=True, help="Offer as a list-view filter (with --label).")
+@click.option("--overwrite", is_flag=True, help="Replace an existing declaration of this name.")
+def add_field(
+    ext_dir: Path,
+    entity: str,
+    name: str,
+    field_type: str,
+    enum_values: str | None,
+    required: bool,
+    indexed: bool,
+    max_length: int | None,
+    label: str | None,
+    group: str,
+    order: int,
+    editor: str | None,
+    list_column: bool,
+    filterable: bool,
+    overwrite: bool,
+) -> None:
+    """Scaffold a valid `*.field.yaml` and wire the fields provides key if absent (SPEC-68).
+
+    The field is validated by the kernel's own parser before anything is written, so the
+    generated file is one `oxtend validate` accepts — the choices are core's, not this
+    tool's.
+    """
+    from oxtend.manifest_vendored import VendoredKernelUnavailable
+    from oxtend.scaffold import ScaffoldError
+    from oxtend.scaffold import add_field as _add_field
+
+    ui: dict | None = None
+    if label is not None:
+        ui = {"label": label, "group": group, "order": order}
+        if editor is not None:
+            ui["editor"] = editor
+        if list_column:
+            ui["list_column"] = True
+        if filterable:
+            ui["filterable"] = True
+    elif editor or list_column or filterable:
+        _warn("--editor/--list-column/--filterable need --label to render; ignoring them")
+
+    values = tuple(v.strip() for v in enum_values.split(",")) if enum_values else ()
+
+    try:
+        result = _add_field(
+            ext_dir, entity, name, field_type,
+            enum_values=values, required=required, indexed=indexed,
+            max_length=max_length, ui=ui, overwrite=overwrite,
+        )
+    except VendoredKernelUnavailable as exc:
+        _fail(str(exc), EXIT_TOOLING)
+        return
+    except ScaffoldError as exc:
+        _fail(str(exc))
+        return
+
+    _ok(f"wrote {result.field_path.relative_to(ext_dir)}")
+    if result.wired:
+        _ok("added `knowledge-hive/fields` to oxtend.yaml provides")
+    elif result.manual_provides:
+        _warn("no `provides:` block found — add this to oxtend.yaml:\n" + result.manual_provides)
+    click.echo("Next: oxtend validate " + str(ext_dir))
 
 
 def _default_bundle_dir(ext_dir: Path) -> Path:
