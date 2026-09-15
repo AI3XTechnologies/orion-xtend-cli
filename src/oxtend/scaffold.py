@@ -89,10 +89,20 @@ def _wire_provides(manifest_path: Path, fields_dir: str) -> tuple[bool, str | No
 
     lines = text.splitlines()
     for i, raw in enumerate(lines):
-        if raw.rstrip() == "provides:" or raw.rstrip().startswith("provides:"):
-            lines.insert(i + 1, line)
-            manifest_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            return True, None
+        stripped = raw.rstrip()
+        if not stripped.startswith("provides:"):
+            continue
+        # `provides: []` is an inline empty list — inserting a `- ...` block item under it
+        # yields `provides: []` followed by a list item, which is not valid YAML (a key
+        # cannot be both an empty inline list and a block list). Rewrite it to a bare block
+        # header first. A bare `provides:` (or one already followed by block items) opens a
+        # block, so the insert-after is safe as-is.
+        if stripped.replace(" ", "") == "provides:[]":
+            indent = raw[: len(raw) - len(raw.lstrip())]
+            lines[i] = f"{indent}provides:"
+        lines.insert(i + 1, line)
+        manifest_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return True, None
     # No `provides:` block to extend. Rewriting the whole manifest would drop its comments,
     # so hand the author the two lines to add instead of guessing where they go.
     return False, f"provides:\n{line}"
