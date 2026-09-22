@@ -10,6 +10,13 @@
     oxtend push          <ext_dir> --registry HOST [--allow-unsigned]
     oxtend all           <ext_dir> --registry HOST
 
+and the local development loop:
+
+    oxtend doctor        [--core DIR]
+    oxtend mount         <ext_dir> --core DIR
+    oxtend dev           <ext_dir> --core DIR
+    oxtend reset         <scope> [--yes]
+
 Exit codes are the interface CI actually consumes: 0 success, 1 validation/contract
 failure, 2 tooling failure (cosign absent, no container CLI). A build tool that
 returns 0 on a soft failure is a build tool that ships broken artifacts.
@@ -19,6 +26,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -26,6 +34,19 @@ import click
 from oxtend import __version__
 from oxtend.build import BuildError, build_bundle
 from oxtend.contract_test import run_contract_test
+from oxtend.devloop import (
+    DEFAULT_CORE_URL,
+    DEFAULT_INTERNAL_KEY,
+    DevLoopError,
+    bundle_target,
+    changed_paths,
+    install_bundle,
+    load_scope,
+    resolve_core_version,
+    snapshot,
+    sync_bundle,
+    touches_ui,
+)
 from oxtend.lock import lock_is_current, write_lock
 from oxtend.manifest_vendored import (
     VendoredKernelUnavailable,
@@ -308,6 +329,255 @@ def add_field(
     click.echo("Next: oxtend validate " + str(ext_dir))
 
 
+# ---------------------------------------------------------------------------
+# The local development loop
+# ---------------------------------------------------------------------------
+
+_CORE_OPTION = click.option(
+    "--core",
+    "core_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path, resolve_path=True),
+    required=True,
+    help="Path to the orion-core checkout whose extensions/ is bind-mounted into the backend.",
+)
+_URL_OPTION = click.option(
+    "--core-url",
+    default=DEFAULT_CORE_URL,
+    show_default=True,
+    help="Running backend to install into.",
+)
+_KEY_OPTION = click.option(
+    "--internal-key",
+    default=None,
+    help="X-Internal-Key for /kernel/*. Defaults to $ORION_INTERNAL_API_KEY, "
+    f"then {DEFAULT_INTERNAL_KEY!r} (compose.local.yaml's default).",
+)
+
+
+@cli.command()
+@click.argument("ext_dir", type=_DIR)
+@_CORE_OPTION
+@click.option("--skip-ui", is_flag=True, help="Skip compiling ui/ (for a metadata-only rebuild).")
+@click.option("--install/--no-install", default=True, help="Also install into a running core.")
+@_URL_OPTION
+@_KEY_OPTION
+def mount(
+    ext_dir: Path,
+    core_dir: Path,
+    skip_ui: bool,
+    install: bool,
+    core_url: str,
+    internal_key: str | None,
+) -> None:
+    """Build a bundle straight into <core>/extensions/<scope> and install it.
+
+    Replaces the RUNBOOK's validate → lock → build → `cp -a` → edit .env → restart
+    sequence. The mounted directory IS the build output, so there is no copy step
+    to forget and no stale `build/` tree to ship by accident.
+
+    --core-version is resolved from the core checkout rather than from the
+    installed wheel, which is register D-108: the wheel says 0.7.0, every bundle
+    requires >=1.0.0-dev.2, and the resulting failure names the bundle.
+    """
+    core_version = resolve_core_version(core_dir)
+    ctx = click.get_current_context()
+    ctx.invoke(validate, ext_dir=ext_dir, core_version=core_version)
+
+    try:
+        target = sync_bundle(ext_dir, core_dir, skip_ui=skip_ui, core_version=core_version)
+    except BuildError as exc:
+        _fail(str(exc))
+        return
+    scope, version = load_scope(ext_dir)
+    _ok(f"mounted {scope}@{version} → {target}")
+
+    if not install:
+        return
+    try:
+        result = install_bundle(scope, core_url=core_url, internal_key=internal_key)
+    except DevLoopError as exc:
+        _fail(str(exc))
+        return
+    _ok(f"installed {result['scope']}@{result['version']} ({result['kind']}) — {result['status']}")
+
+
+@cli.command()
+@click.argument("ext_dir", type=_DIR)
+@_CORE_OPTION
+@_URL_OPTION
+@_KEY_OPTION
+@click.option("--interval", default=0.7, show_default=True, help="Seconds between polls.")
+@click.option(
+    "--once", is_flag=True, help="Sync and install a single time, then exit (for scripts and CI)."
+)
+def dev(
+    ext_dir: Path,
+    core_dir: Path,
+    core_url: str,
+    internal_key: str | None,
+    interval: float,
+    once: bool,
+) -> None:
+    """Watch a bundle and reinstall it into the running core on every change.
+
+    No container restart. The kernel unmounts the scope's routes, evicts its
+    modules from sys.modules, invalidates the OpenAPI and route-matcher caches and
+    remounts — all under a per-scope advisory lock. That path already existed and
+    was exposed over HTTP; this is the thing that calls it.
+
+    A change confined to metadata, migrations, prompts or Python passes --skip-ui,
+    so npm only runs when something under ui/ actually moved.
+
+    Note what this does NOT reload: core's own source. That is uvicorn --reload's
+    job, which compose.local.yaml turns on.
+    """
+    scope, version = load_scope(ext_dir)
+    click.echo(f"watching {ext_dir} → {bundle_target(core_dir, scope)}")
+
+    def cycle(skip_ui: bool) -> bool:
+        started = time.monotonic()
+        try:
+            sync_bundle(
+                ext_dir, core_dir, skip_ui=skip_ui, core_version=resolve_core_version(core_dir)
+            )
+            result = install_bundle(scope, core_url=core_url, internal_key=internal_key)
+        except (BuildError, DevLoopError) as exc:
+            # Never fatal in watch mode. A bundle mid-edit is invalid more often
+            # than not, and a loop that exits on the first bad save is a loop
+            # nobody leaves running.
+            _warn(f"{exc}")
+            return False
+        _ok(
+            f"{result['scope']}@{result['version']} reinstalled "
+            f"in {time.monotonic() - started:.1f}s"
+        )
+        return True
+
+    ok = cycle(skip_ui=False)
+    if once:
+        sys.exit(EXIT_OK if ok else EXIT_INVALID)
+
+    state = snapshot(ext_dir)
+    try:
+        while True:
+            time.sleep(interval)
+            current = snapshot(ext_dir)
+            changed = changed_paths(state, current)
+            if not changed:
+                continue
+            state = current
+            preview = ", ".join(sorted(changed)[:3])
+            more = f" (+{len(changed) - 3} more)" if len(changed) > 3 else ""
+            click.echo(f"  changed: {preview}{more}")
+            cycle(skip_ui=not touches_ui(changed))
+            # Re-snapshot: the build writes into <core>/extensions, but a UI
+            # compile also writes ui/dist and ui/node_modules inside the source
+            # tree, which would otherwise register as a change and loop.
+            state = snapshot(ext_dir)
+    except KeyboardInterrupt:
+        click.echo("\nstopped watching")
+
+
+@cli.command()
+@click.argument("scope")
+@click.option(
+    "--database-url",
+    default=None,
+    help="Async DSN. Defaults to $ORION_DEV_DATABASE_URL, then compose.local.yaml's "
+    "postgres on localhost:15432.",
+)
+@click.option("--keep-schema", is_flag=True, help="Delete ledger rows but leave the scope schema.")
+@click.option(
+    "--revoke-entitlement", is_flag=True, help="Also delete the scope's entitlement rows."
+)
+@click.option("--yes", is_flag=True, help="Do not prompt.")
+@click.option("--force", is_flag=True, help="Allow a non-loopback database. Think first.")
+def reset(
+    scope: str,
+    database_url: str | None,
+    keep_schema: bool,
+    revoke_entitlement: bool,
+    yes: bool,
+    force: bool,
+) -> None:
+    """Undo a scope's install so an edited migration can be applied again.
+
+    Bundle migrations are append-only and checksum-ledgered, so re-running a file
+    whose bytes changed raises MigrationChecksumMismatch. Correct in production;
+    impossible to write a migration under. This restores the never-installed state
+    for one scope: its ledger rows, its derived registry rows, and its schema.
+    """
+    import asyncio
+    import os
+
+    from oxtend.reset import ResetError, assert_local, assert_safe_scope, reset_scope
+
+    dsn = (
+        database_url
+        or os.environ.get("ORION_DEV_DATABASE_URL")
+        or "postgresql+asyncpg://orion:orion-local@localhost:15432/orion"
+    )
+    try:
+        assert_safe_scope(scope)
+        assert_local(dsn, force=force)
+    except ResetError as exc:
+        _fail(str(exc))
+        return
+
+    if not yes:
+        what = "ledger rows" if keep_schema else f'ledger rows AND schema "{scope}"'
+        click.confirm(f"Delete {what} for {scope}?", abort=True)
+
+    try:
+        result = asyncio.run(
+            reset_scope(
+                dsn,
+                scope,
+                drop_schema=not keep_schema,
+                revoke_entitlement=revoke_entitlement,
+            )
+        )
+    except ResetError as exc:
+        _fail(str(exc))
+        return
+    except Exception as exc:  # noqa: BLE001 - surfaced verbatim; usually connectivity
+        _fail(f"reset failed: {exc}", EXIT_TOOLING)
+        return
+
+    for table, count in result.items():
+        if table == "schema_dropped":
+            continue
+        click.echo(f"  {table}: {count} row(s)")
+    if result.get("schema_dropped"):
+        click.echo(f'  schema "{scope}": dropped')
+    _ok(f"{scope} reset — reinstall it with `oxtend mount`")
+
+
+@cli.command()
+@click.option(
+    "--core",
+    "core_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path, resolve_path=True),
+    default=None,
+    help="Path to the orion-core checkout, for the checks that need one.",
+)
+@_URL_OPTION
+@_KEY_OPTION
+def doctor(core_dir: Path | None, core_url: str, internal_key: str | None) -> None:
+    """Check the things that otherwise fail confusingly."""
+    from oxtend.doctor import FAIL, OK, WARN, run_doctor
+
+    checks = run_doctor(core_dir=core_dir, core_url=core_url, internal_key=internal_key)
+    colours = {OK: "green", WARN: "yellow", FAIL: "red"}
+    marks = {OK: "✓", WARN: "!", FAIL: "✗"}
+    for check in checks:
+        click.secho(f"{marks[check.status]} {check.name}: {check.detail}", fg=colours[check.status])
+    failures = sum(1 for c in checks if c.status == FAIL)
+    if failures:
+        _fail(f"{failures} check(s) failed")
+    _ok("all checks passed")
+
+
 def _default_bundle_dir(ext_dir: Path) -> Path:
     """Where `build` put the bundle: `<ext_dir>/build/<scope>-<version>`."""
     from oxtend.manifest_vendored import kernel_manifest_module
@@ -317,6 +587,24 @@ def _default_bundle_dir(ext_dir: Path) -> Path:
 
 
 def main() -> None:  # pragma: no cover - console_scripts entry point
+    # Register D-110, fixed at the source rather than documented as a workaround.
+    #
+    # Every result line here starts with U+2713 or U+2717. On a Windows console
+    # that is not UTF-8, writing one raises UnicodeEncodeError *after* the command
+    # has already done its work — so a successful build exits 1 with a traceback
+    # about a checkmark, and CI reports a failure with no failing step. The
+    # RUNBOOK's answer was to have every developer remember
+    # `export PYTHONIOENCODING=utf-8` before every invocation.
+    #
+    # errors="replace" rather than "strict": if a stream still cannot represent a
+    # mark, the right outcome is a mangled glyph, never a failed command.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, OSError):
+            # Not a reconfigurable TextIOWrapper — captured output under pytest,
+            # or a pipe someone replaced. Nothing to do and nothing to report.
+            pass
     cli()
 
 
