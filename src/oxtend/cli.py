@@ -53,8 +53,16 @@ from oxtend.manifest_vendored import (
     installed_core_version,
 )
 from oxtend.package import PackagingError, package_bundle, push_bundle
+from oxtend.seed import SeedError, seed_collection
 from oxtend.sign import SigningError, sign_bundle
 from oxtend.validate import validate_bundle
+from oxtend.workspace import (
+    DEFAULT_FILE,
+    WorkspaceError,
+    compose,
+    load_workspace,
+    wait_for_core,
+)
 
 EXIT_OK = 0
 EXIT_INVALID = 1
@@ -576,6 +584,160 @@ def doctor(core_dir: Path | None, core_url: str, internal_key: str | None) -> No
     if failures:
         _fail(f"{failures} check(s) failed")
     _ok("all checks passed")
+
+
+_WORKSPACE_OPTION = click.option(
+    "--file",
+    "-f",
+    "workspace_file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=f"Workspace file. Defaults to ./{DEFAULT_FILE}, then the git root's.",
+)
+
+
+def _find_workspace(explicit: Path | None) -> Path:
+    """Locate the workspace file: an explicit path, else walk up to the repo root.
+
+    Walking up matters because the umbrella's workspace file sits at its root
+    while the work happens two levels down in a bundle directory, and requiring
+    -f from there would mean typing a relative path nobody remembers.
+    """
+    if explicit is not None:
+        return explicit.resolve()
+    here = Path.cwd().resolve()
+    for directory in (here, *here.parents):
+        candidate = directory / DEFAULT_FILE
+        if candidate.is_file():
+            return candidate
+    return here / DEFAULT_FILE  # load_workspace raises with a useful message
+
+
+@cli.group()
+def workspace() -> None:
+    """Drive a whole checkout — the core plus the bundles listed in workspace.yaml."""
+
+
+@workspace.command(name="up")
+@_WORKSPACE_OPTION
+@click.option("--no-core", is_flag=True, help="Assume the core is already running.")
+@click.option("--no-seed", is_flag=True, help="Skip seeding the demo collection.")
+@click.option("--skip-ui", is_flag=True, help="Skip compiling ui/ for every bundle.")
+@click.option("--build", is_flag=True, help="Pass --build to docker compose up.")
+def workspace_up(
+    workspace_file: Path | None,
+    no_core: bool,
+    no_seed: bool,
+    skip_ui: bool,
+    build: bool,
+) -> None:
+    """Start the core, then mount every bundle in the workspace into it.
+
+    The order is the whole point: compose up, wait for /health, then mount. A
+    bundle installed against a core that is still migrating fails in a way that
+    reads as a bad bundle, so this waits rather than racing.
+    """
+    try:
+        ws = load_workspace(_find_workspace(workspace_file))
+    except WorkspaceError as exc:
+        _fail(str(exc), code=EXIT_TOOLING)
+        return
+
+    if not no_core:
+        click.echo(f"starting core: docker compose -f {ws.compose_file} up -d")
+        try:
+            compose(ws, "up", "-d", *(["--build"] if build else []))
+        except WorkspaceError as exc:
+            _fail(str(exc), code=EXIT_TOOLING)
+            return
+
+    try:
+        waited = wait_for_core(ws.core_url)
+    except WorkspaceError as exc:
+        _fail(str(exc), code=EXIT_TOOLING)
+        return
+    _ok(f"core healthy at {ws.core_url} ({waited:.0f}s)")
+
+    core_version = resolve_core_version(ws.core_dir)
+    ctx = click.get_current_context()
+    failed: list[str] = []
+    for bundle in ws.bundles:
+        scope, version = load_scope(bundle)
+        try:
+            ctx.invoke(validate, ext_dir=bundle, core_version=core_version)
+            sync_bundle(bundle, ws.core_dir, skip_ui=skip_ui, core_version=core_version)
+            result = install_bundle(scope, core_url=ws.core_url, internal_key=None)
+        except (BuildError, DevLoopError, click.ClickException) as exc:
+            # One bad bundle must not strand the rest: the common case is a
+            # checkout mid-edit, and a workspace that refuses to come up because
+            # of it is a workspace nobody uses.
+            _warn(f"{scope}@{version}: {exc}")
+            failed.append(scope)
+            continue
+        _ok(f"{result['scope']}@{result['version']} ({result['kind']}) — {result['status']}")
+
+    if not no_seed:
+        try:
+            seeded = seed_collection(ws.core_url)
+        except SeedError as exc:
+            _warn(f"seed skipped: {exc}")
+        else:
+            verb = "created" if seeded.created else "already present"
+            _ok(f"collection {seeded.slug!r} {verb}")
+
+    if failed:
+        _fail(f"{len(failed)} bundle(s) did not install: {', '.join(failed)}")
+        return
+    _ok(f"workspace up — {len(ws.bundles)} bundle(s) in {ws.core_url}")
+
+
+@workspace.command(name="down")
+@_WORKSPACE_OPTION
+@click.option("--volumes", "-v", is_flag=True, help="Also delete volumes (drops the database).")
+def workspace_down(workspace_file: Path | None, volumes: bool) -> None:
+    """Stop the core. With --volumes, throw the database away too."""
+    try:
+        ws = load_workspace(_find_workspace(workspace_file))
+        compose(ws, "down", *(["-v"] if volumes else []))
+    except WorkspaceError as exc:
+        _fail(str(exc), code=EXIT_TOOLING)
+        return
+    _ok("workspace down" + (" (volumes removed)" if volumes else ""))
+
+
+@workspace.command(name="list")
+@_WORKSPACE_OPTION
+def workspace_list(workspace_file: Path | None) -> None:
+    """Show what the workspace file resolves to, without starting anything."""
+    try:
+        ws = load_workspace(_find_workspace(workspace_file))
+    except WorkspaceError as exc:
+        _fail(str(exc), code=EXIT_TOOLING)
+        return
+    click.echo(f"core    {ws.core_dir}  ({ws.compose_file} → {ws.core_url})")
+    for bundle in ws.bundles:
+        scope, version = load_scope(bundle)
+        click.echo(f"bundle  {scope}@{version}  {bundle}")
+
+
+@cli.command()
+@_URL_OPTION
+@click.option("--name", default=None, help="Collection name. The slug is derived from it.")
+def seed(core_url: str, name: str | None) -> None:
+    """Create the demo collection a fresh core needs to not be an empty shell.
+
+    Idempotent: a collection whose slug already exists is left alone, so this is
+    safe on every `workspace up`.
+
+    Documents are not seeded. Ingestion needs an embedding model and an LLM key,
+    which the local stack does not configure.
+    """
+    try:
+        result = seed_collection(core_url, **({"name": name} if name else {}))
+    except SeedError as exc:
+        _fail(str(exc))
+        return
+    _ok(f"collection {result.slug!r} {'created' if result.created else 'already present'}")
 
 
 def _default_bundle_dir(ext_dir: Path) -> Path:
