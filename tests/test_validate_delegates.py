@@ -29,7 +29,16 @@ _SCOPE_REGEX_SHAPES = [
 
 
 def _cli_sources() -> list[tuple[str, str]]:
-    return [(p.name, p.read_text()) for p in sorted(_SRC.glob("*.py"))]
+    # encoding="utf-8" is required, not tidiness. Python source is UTF-8 by PEP
+    # 3120, but `Path.read_text()` with no encoding uses the *locale* codec, which
+    # on a Windows box is cp1252. Every file in this package already contains em
+    # dashes, and the first source byte cp1252 cannot decode (0x90, from a "←")
+    # turned this guard into a UnicodeDecodeError — a rule-duplication check that
+    # fails for a reason having nothing to do with rule duplication, and only on
+    # some machines.
+    return [
+        (p.name, p.read_text(encoding="utf-8")) for p in sorted(_SRC.glob("*.py"))
+    ]
 
 
 @pytest.mark.parametrize("pattern", _SCOPE_REGEX_SHAPES, ids=lambda p: p.pattern[:24])

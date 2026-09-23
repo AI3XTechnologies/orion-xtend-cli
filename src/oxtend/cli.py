@@ -1,5 +1,6 @@
 """The `oxtend` command line (SPEC-67 §5.1, ORION-688).
 
+    oxtend add-field     <ext_dir> --entity E --name N --type T [ui options]
     oxtend validate      <ext_dir>
     oxtend build         <ext_dir> [--out DIR] [--require-lock]
     oxtend contract-test <ext_dir> --core-version X.Y.Z [--openapi FILE]
@@ -8,6 +9,21 @@
     oxtend package       <ext_dir> --registry HOST
     oxtend push          <ext_dir> --registry HOST [--allow-unsigned]
     oxtend all           <ext_dir> --registry HOST
+
+and the local development loop:
+
+    oxtend doctor        [--core DIR]
+    oxtend mount         <ext_dir> --core DIR
+    oxtend dev           <ext_dir> --core DIR
+    oxtend reset         <scope> [--yes]
+
+and the whole-checkout loop, driven by workspace.yaml:
+
+    oxtend workspace up  [--no-core] [--no-seed] [--build]
+    oxtend workspace link                  # bundles from their own repos, no build
+    oxtend workspace list
+    oxtend workspace down [-v]
+    oxtend seed          [--name NAME]
 
 Exit codes are the interface CI actually consumes: 0 success, 1 validation/contract
 failure, 2 tooling failure (cosign absent, no container CLI). A build tool that
@@ -18,6 +34,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -25,14 +42,38 @@ import click
 from oxtend import __version__
 from oxtend.build import BuildError, build_bundle
 from oxtend.contract_test import run_contract_test
+from oxtend.devloop import (
+    DEFAULT_CORE_URL,
+    DEFAULT_INTERNAL_KEY,
+    DevLoopError,
+    bundle_target,
+    changed_paths,
+    install_bundle,
+    load_scope,
+    resolve_core_version,
+    snapshot,
+    sync_bundle,
+    touches_ui,
+)
 from oxtend.lock import lock_is_current, write_lock
 from oxtend.manifest_vendored import (
     VendoredKernelUnavailable,
     installed_core_version,
 )
 from oxtend.package import PackagingError, package_bundle, push_bundle
+from oxtend.seed import SeedError, seed_collection
 from oxtend.sign import SigningError, sign_bundle
 from oxtend.validate import validate_bundle
+from oxtend.workspace import (
+    DEFAULT_FILE,
+    LINK_FILE,
+    WorkspaceError,
+    compose,
+    is_linked,
+    load_workspace,
+    render_link_override,
+    wait_for_core,
+)
 
 EXIT_OK = 0
 EXIT_INVALID = 1
@@ -223,6 +264,548 @@ def run_all(
     ctx.invoke(push, ext_dir=ext_dir, registry=registry, bundle_dir=None, allow_unsigned=allow_unsigned)
 
 
+@cli.command(name="add-field")
+@click.argument("ext_dir", type=_DIR)
+@click.option("--entity", required=True, help="Core entity: collections, documents, chunks.")
+@click.option("--name", required=True, help="Field name — lower snake_case, scope-prefixed.")
+@click.option(
+    "--type", "field_type", default="string",
+    help="string|int|float|bool|date|enum|string[].",
+)
+@click.option("--enum-values", default=None, help="Comma-separated values (for --type enum).")
+@click.option("--required", is_flag=True, help="Reject a write that omits this field.")
+@click.option("--indexed", is_flag=True, help="Create an index so the field is filter-fast.")
+@click.option("--max-length", type=int, default=None, help="Max length (string / string[] only).")
+@click.option("--label", default=None, help="UI label — its presence makes the field UI-visible.")
+@click.option("--group", default="Custom", help="UI group heading (with --label).")
+@click.option("--order", type=int, default=0, help="UI sort order in the group (with --label).")
+@click.option(
+    "--editor", default=None,
+    help="text|textarea|number|boolean|datetime|select|list_chips.",
+)
+@click.option("--list-column", is_flag=True, help="Show as a list-view column (with --label).")
+@click.option("--filterable", is_flag=True, help="Offer as a list-view filter (with --label).")
+@click.option("--overwrite", is_flag=True, help="Replace an existing declaration of this name.")
+def add_field(
+    ext_dir: Path,
+    entity: str,
+    name: str,
+    field_type: str,
+    enum_values: str | None,
+    required: bool,
+    indexed: bool,
+    max_length: int | None,
+    label: str | None,
+    group: str,
+    order: int,
+    editor: str | None,
+    list_column: bool,
+    filterable: bool,
+    overwrite: bool,
+) -> None:
+    """Scaffold a valid `*.field.yaml` and wire the fields provides key if absent (SPEC-68).
+
+    The field is validated by the kernel's own parser before anything is written, so the
+    generated file is one `oxtend validate` accepts — the choices are core's, not this
+    tool's.
+    """
+    from oxtend.manifest_vendored import VendoredKernelUnavailable
+    from oxtend.scaffold import ScaffoldError
+    from oxtend.scaffold import add_field as _add_field
+
+    ui: dict | None = None
+    if label is not None:
+        ui = {"label": label, "group": group, "order": order}
+        if editor is not None:
+            ui["editor"] = editor
+        if list_column:
+            ui["list_column"] = True
+        if filterable:
+            ui["filterable"] = True
+    elif editor or list_column or filterable:
+        _warn("--editor/--list-column/--filterable need --label to render; ignoring them")
+
+    values = tuple(v.strip() for v in enum_values.split(",")) if enum_values else ()
+
+    try:
+        result = _add_field(
+            ext_dir, entity, name, field_type,
+            enum_values=values, required=required, indexed=indexed,
+            max_length=max_length, ui=ui, overwrite=overwrite,
+        )
+    except VendoredKernelUnavailable as exc:
+        _fail(str(exc), EXIT_TOOLING)
+        return
+    except ScaffoldError as exc:
+        _fail(str(exc))
+        return
+
+    _ok(f"wrote {result.field_path.relative_to(ext_dir)}")
+    if result.wired:
+        _ok("added `knowledge-hive/fields` to oxtend.yaml provides")
+    elif result.manual_provides:
+        _warn("no `provides:` block found — add this to oxtend.yaml:\n" + result.manual_provides)
+    click.echo("Next: oxtend validate " + str(ext_dir))
+
+
+# ---------------------------------------------------------------------------
+# The local development loop
+# ---------------------------------------------------------------------------
+
+_CORE_OPTION = click.option(
+    "--core",
+    "core_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path, resolve_path=True),
+    required=True,
+    help="Path to the orion-core checkout whose extensions/ is bind-mounted into the backend.",
+)
+_URL_OPTION = click.option(
+    "--core-url",
+    default=DEFAULT_CORE_URL,
+    show_default=True,
+    help="Running backend to install into.",
+)
+_KEY_OPTION = click.option(
+    "--internal-key",
+    default=None,
+    help="X-Internal-Key for /kernel/*. Defaults to $ORION_INTERNAL_API_KEY, "
+    f"then {DEFAULT_INTERNAL_KEY!r} (compose.local.yaml's default).",
+)
+
+
+@cli.command()
+@click.argument("ext_dir", type=_DIR)
+@_CORE_OPTION
+@click.option("--skip-ui", is_flag=True, help="Skip compiling ui/ (for a metadata-only rebuild).")
+@click.option("--install/--no-install", default=True, help="Also install into a running core.")
+@_URL_OPTION
+@_KEY_OPTION
+def mount(
+    ext_dir: Path,
+    core_dir: Path,
+    skip_ui: bool,
+    install: bool,
+    core_url: str,
+    internal_key: str | None,
+) -> None:
+    """Build a bundle straight into <core>/extensions/<scope> and install it.
+
+    Replaces the RUNBOOK's validate → lock → build → `cp -a` → edit .env → restart
+    sequence. The mounted directory IS the build output, so there is no copy step
+    to forget and no stale `build/` tree to ship by accident.
+
+    --core-version is resolved from the core checkout rather than from the
+    installed wheel, which is register D-108: the wheel says 0.7.0, every bundle
+    requires >=1.0.0-dev.2, and the resulting failure names the bundle.
+    """
+    core_version = resolve_core_version(core_dir)
+    ctx = click.get_current_context()
+    ctx.invoke(validate, ext_dir=ext_dir, core_version=core_version)
+
+    try:
+        target = sync_bundle(ext_dir, core_dir, skip_ui=skip_ui, core_version=core_version)
+    except BuildError as exc:
+        _fail(str(exc))
+        return
+    scope, version = load_scope(ext_dir)
+    _ok(f"mounted {scope}@{version} → {target}")
+
+    if not install:
+        return
+    try:
+        result = install_bundle(scope, core_url=core_url, internal_key=internal_key)
+    except DevLoopError as exc:
+        _fail(str(exc))
+        return
+    _ok(f"installed {result['scope']}@{result['version']} ({result['kind']}) — {result['status']}")
+
+
+@cli.command()
+@click.argument("ext_dir", type=_DIR)
+@_CORE_OPTION
+@_URL_OPTION
+@_KEY_OPTION
+@click.option("--interval", default=0.7, show_default=True, help="Seconds between polls.")
+@click.option(
+    "--once", is_flag=True, help="Sync and install a single time, then exit (for scripts and CI)."
+)
+def dev(
+    ext_dir: Path,
+    core_dir: Path,
+    core_url: str,
+    internal_key: str | None,
+    interval: float,
+    once: bool,
+) -> None:
+    """Watch a bundle and reinstall it into the running core on every change.
+
+    No container restart. The kernel unmounts the scope's routes, evicts its
+    modules from sys.modules, invalidates the OpenAPI and route-matcher caches and
+    remounts — all under a per-scope advisory lock. That path already existed and
+    was exposed over HTTP; this is the thing that calls it.
+
+    A change confined to metadata, migrations, prompts or Python passes --skip-ui,
+    so npm only runs when something under ui/ actually moved.
+
+    Note what this does NOT reload: core's own source. That is uvicorn --reload's
+    job, which compose.local.yaml turns on.
+    """
+    scope, version = load_scope(ext_dir)
+    click.echo(f"watching {ext_dir} → {bundle_target(core_dir, scope)}")
+
+    def cycle(skip_ui: bool) -> bool:
+        started = time.monotonic()
+        try:
+            sync_bundle(
+                ext_dir, core_dir, skip_ui=skip_ui, core_version=resolve_core_version(core_dir)
+            )
+            result = install_bundle(scope, core_url=core_url, internal_key=internal_key)
+        except (BuildError, DevLoopError) as exc:
+            # Never fatal in watch mode. A bundle mid-edit is invalid more often
+            # than not, and a loop that exits on the first bad save is a loop
+            # nobody leaves running.
+            _warn(f"{exc}")
+            return False
+        _ok(
+            f"{result['scope']}@{result['version']} reinstalled "
+            f"in {time.monotonic() - started:.1f}s"
+        )
+        return True
+
+    ok = cycle(skip_ui=False)
+    if once:
+        sys.exit(EXIT_OK if ok else EXIT_INVALID)
+
+    state = snapshot(ext_dir)
+    try:
+        while True:
+            time.sleep(interval)
+            current = snapshot(ext_dir)
+            changed = changed_paths(state, current)
+            if not changed:
+                continue
+            state = current
+            preview = ", ".join(sorted(changed)[:3])
+            more = f" (+{len(changed) - 3} more)" if len(changed) > 3 else ""
+            click.echo(f"  changed: {preview}{more}")
+            cycle(skip_ui=not touches_ui(changed))
+            # Re-snapshot: the build writes into <core>/extensions, but a UI
+            # compile also writes ui/dist and ui/node_modules inside the source
+            # tree, which would otherwise register as a change and loop.
+            state = snapshot(ext_dir)
+    except KeyboardInterrupt:
+        click.echo("\nstopped watching")
+
+
+@cli.command()
+@click.argument("scope")
+@click.option(
+    "--database-url",
+    default=None,
+    help="Async DSN. Defaults to $ORION_DEV_DATABASE_URL, then compose.local.yaml's "
+    "postgres on localhost:15432.",
+)
+@click.option("--keep-schema", is_flag=True, help="Delete ledger rows but leave the scope schema.")
+@click.option(
+    "--revoke-entitlement", is_flag=True, help="Also delete the scope's entitlement rows."
+)
+@click.option("--yes", is_flag=True, help="Do not prompt.")
+@click.option("--force", is_flag=True, help="Allow a non-loopback database. Think first.")
+def reset(
+    scope: str,
+    database_url: str | None,
+    keep_schema: bool,
+    revoke_entitlement: bool,
+    yes: bool,
+    force: bool,
+) -> None:
+    """Undo a scope's install so an edited migration can be applied again.
+
+    Bundle migrations are append-only and checksum-ledgered, so re-running a file
+    whose bytes changed raises MigrationChecksumMismatch. Correct in production;
+    impossible to write a migration under. This restores the never-installed state
+    for one scope: its ledger rows, its derived registry rows, and its schema.
+    """
+    import asyncio
+    import os
+
+    from oxtend.reset import ResetError, assert_local, assert_safe_scope, reset_scope
+
+    dsn = (
+        database_url
+        or os.environ.get("ORION_DEV_DATABASE_URL")
+        or "postgresql+asyncpg://orion:orion-local@localhost:15432/orion"
+    )
+    try:
+        assert_safe_scope(scope)
+        assert_local(dsn, force=force)
+    except ResetError as exc:
+        _fail(str(exc))
+        return
+
+    if not yes:
+        what = "ledger rows" if keep_schema else f'ledger rows AND schema "{scope}"'
+        click.confirm(f"Delete {what} for {scope}?", abort=True)
+
+    try:
+        result = asyncio.run(
+            reset_scope(
+                dsn,
+                scope,
+                drop_schema=not keep_schema,
+                revoke_entitlement=revoke_entitlement,
+            )
+        )
+    except ResetError as exc:
+        _fail(str(exc))
+        return
+    except Exception as exc:  # noqa: BLE001 - surfaced verbatim; usually connectivity
+        _fail(f"reset failed: {exc}", EXIT_TOOLING)
+        return
+
+    for table, count in result.items():
+        if table == "schema_dropped":
+            continue
+        click.echo(f"  {table}: {count} row(s)")
+    if result.get("schema_dropped"):
+        click.echo(f'  schema "{scope}": dropped')
+    _ok(f"{scope} reset — reinstall it with `oxtend mount`")
+
+
+@cli.command()
+@click.option(
+    "--core",
+    "core_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path, resolve_path=True),
+    default=None,
+    help="Path to the orion-core checkout, for the checks that need one.",
+)
+@_URL_OPTION
+@_KEY_OPTION
+def doctor(core_dir: Path | None, core_url: str, internal_key: str | None) -> None:
+    """Check the things that otherwise fail confusingly."""
+    from oxtend.doctor import FAIL, OK, WARN, run_doctor
+
+    checks = run_doctor(core_dir=core_dir, core_url=core_url, internal_key=internal_key)
+    colours = {OK: "green", WARN: "yellow", FAIL: "red"}
+    marks = {OK: "✓", WARN: "!", FAIL: "✗"}
+    for check in checks:
+        click.secho(f"{marks[check.status]} {check.name}: {check.detail}", fg=colours[check.status])
+    failures = sum(1 for c in checks if c.status == FAIL)
+    if failures:
+        _fail(f"{failures} check(s) failed")
+    _ok("all checks passed")
+
+
+_WORKSPACE_OPTION = click.option(
+    "--file",
+    "-f",
+    "workspace_file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=f"Workspace file. Defaults to ./{DEFAULT_FILE}, then the git root's.",
+)
+
+
+def _find_workspace(explicit: Path | None) -> Path:
+    """Locate the workspace file: an explicit path, else walk up to the repo root.
+
+    Walking up matters because the umbrella's workspace file sits at its root
+    while the work happens two levels down in a bundle directory, and requiring
+    -f from there would mean typing a relative path nobody remembers.
+    """
+    if explicit is not None:
+        return explicit.resolve()
+    here = Path.cwd().resolve()
+    for directory in (here, *here.parents):
+        candidate = directory / DEFAULT_FILE
+        if candidate.is_file():
+            return candidate
+    return here / DEFAULT_FILE  # load_workspace raises with a useful message
+
+
+@cli.group()
+def workspace() -> None:
+    """Drive a whole checkout — the core plus the bundles listed in workspace.yaml."""
+
+
+@workspace.command(name="up")
+@_WORKSPACE_OPTION
+@click.option("--no-core", is_flag=True, help="Assume the core is already running.")
+@click.option("--no-seed", is_flag=True, help="Skip seeding the demo collection.")
+@click.option("--skip-ui", is_flag=True, help="Skip compiling ui/ for every bundle.")
+@click.option("--build", is_flag=True, help="Pass --build to docker compose up.")
+def workspace_up(
+    workspace_file: Path | None,
+    no_core: bool,
+    no_seed: bool,
+    skip_ui: bool,
+    build: bool,
+) -> None:
+    """Start the core, then mount every bundle in the workspace into it.
+
+    The order is the whole point: compose up, wait for /health, then mount. A
+    bundle installed against a core that is still migrating fails in a way that
+    reads as a bad bundle, so this waits rather than racing.
+    """
+    try:
+        ws = load_workspace(_find_workspace(workspace_file))
+    except WorkspaceError as exc:
+        _fail(str(exc), code=EXIT_TOOLING)
+        return
+
+    linked = is_linked(ws)
+    if linked:
+        click.echo(
+            f"{LINK_FILE} present — bundles mount from their own repos and "
+            f"ORION_KERNEL_DEV_MODE is on. Digests are NOT verified."
+        )
+
+    if not no_core:
+        click.echo(f"starting core: docker compose -f {ws.compose_file} up -d")
+        try:
+            compose(ws, "up", "-d", *(["--build"] if build else []))
+        except WorkspaceError as exc:
+            _fail(str(exc), code=EXIT_TOOLING)
+            return
+
+    try:
+        waited = wait_for_core(ws.core_url)
+    except WorkspaceError as exc:
+        _fail(str(exc), code=EXIT_TOOLING)
+        return
+    _ok(f"core healthy at {ws.core_url} ({waited:.0f}s)")
+
+    core_version = resolve_core_version(ws.core_dir)
+    ctx = click.get_current_context()
+    failed: list[str] = []
+    for bundle in ws.bundles:
+        scope, version = load_scope(bundle)
+        try:
+            ctx.invoke(validate, ext_dir=bundle, core_version=core_version)
+            # Linked: the bundle is already mounted from its own repo, so building
+            # it into <core>/extensions would write a second copy the container
+            # cannot even see — the per-scope mount shadows that path. Install only.
+            if not linked:
+                sync_bundle(bundle, ws.core_dir, skip_ui=skip_ui, core_version=core_version)
+            result = install_bundle(scope, core_url=ws.core_url, internal_key=None)
+        except (BuildError, DevLoopError, click.ClickException) as exc:
+            # One bad bundle must not strand the rest: the common case is a
+            # checkout mid-edit, and a workspace that refuses to come up because
+            # of it is a workspace nobody uses.
+            _warn(f"{scope}@{version}: {exc}")
+            failed.append(scope)
+            continue
+        _ok(f"{result['scope']}@{result['version']} ({result['kind']}) — {result['status']}")
+
+    if not no_seed:
+        try:
+            seeded = seed_collection(ws.core_url)
+        except SeedError as exc:
+            _warn(f"seed skipped: {exc}")
+        else:
+            verb = "created" if seeded.created else "already present"
+            _ok(f"collection {seeded.slug!r} {verb}")
+
+    if failed:
+        _fail(f"{len(failed)} bundle(s) did not install: {', '.join(failed)}")
+        return
+    _ok(f"workspace up — {len(ws.bundles)} bundle(s) in {ws.core_url}")
+
+
+@workspace.command(name="down")
+@_WORKSPACE_OPTION
+@click.option("--volumes", "-v", is_flag=True, help="Also delete volumes (drops the database).")
+def workspace_down(workspace_file: Path | None, volumes: bool) -> None:
+    """Stop the core. With --volumes, throw the database away too."""
+    try:
+        ws = load_workspace(_find_workspace(workspace_file))
+        compose(ws, "down", *(["-v"] if volumes else []))
+    except WorkspaceError as exc:
+        _fail(str(exc), code=EXIT_TOOLING)
+        return
+    _ok("workspace down" + (" (volumes removed)" if volumes else ""))
+
+
+@workspace.command(name="link")
+@_WORKSPACE_OPTION
+@click.option("--print", "to_stdout", is_flag=True, help="Print the override instead of writing it.")
+def workspace_link(workspace_file: Path | None, to_stdout: bool) -> None:
+    """Mount every bundle from the repo it lives in — no build, no copy.
+
+    Writes a compose override that bind-mounts each bundle straight into
+    /extensions/<scope> and turns on ORION_KERNEL_DEV_MODE. After this, editing a
+    field, a migration or a manifest is visible to the container immediately and
+    `oxtend dev` only has to POST the reinstall.
+
+    Dev mode is required because the kernel's digest hashes every file under a
+    bundle directory — right for a built bundle, impossible for a working tree that
+    also holds tests/, build/ and node_modules/. The ledger records
+    `dev:unverified` instead, and the kernel re-verifies any such row once dev mode
+    is off. Local only: an unverified bundle directory is arbitrary code.
+    """
+    try:
+        ws = load_workspace(_find_workspace(workspace_file))
+        scopes = [(load_scope(b)[0], b) for b in ws.bundles]
+    except WorkspaceError as exc:
+        _fail(str(exc), code=EXIT_TOOLING)
+        return
+    if not scopes:
+        _fail("the workspace lists no bundles, so there is nothing to link", code=EXIT_TOOLING)
+        return
+
+    rendered = render_link_override(ws, scopes)
+    if to_stdout:
+        click.echo(rendered)
+        return
+
+    target = ws.core_dir / LINK_FILE
+    target.write_text(rendered, encoding="utf-8", newline="")
+    _ok(f"wrote {target}")
+    for scope, path in scopes:
+        click.echo(f"  {scope} ← {path}")
+    click.echo(
+        f"\nbring the stack up with both files, from {ws.core_dir}:\n"
+        f"  docker compose -f {ws.compose_file} -f {LINK_FILE} up -d\n"
+        f"\nORION_KERNEL_DEV_MODE is on in that override. Bundles are NOT verified."
+    )
+
+
+@workspace.command(name="list")
+@_WORKSPACE_OPTION
+def workspace_list(workspace_file: Path | None) -> None:
+    """Show what the workspace file resolves to, without starting anything."""
+    try:
+        ws = load_workspace(_find_workspace(workspace_file))
+    except WorkspaceError as exc:
+        _fail(str(exc), code=EXIT_TOOLING)
+        return
+    click.echo(f"core    {ws.core_dir}  ({ws.compose_file} → {ws.core_url})")
+    for bundle in ws.bundles:
+        scope, version = load_scope(bundle)
+        click.echo(f"bundle  {scope}@{version}  {bundle}")
+
+
+@cli.command()
+@_URL_OPTION
+@click.option("--name", default=None, help="Collection name. The slug is derived from it.")
+def seed(core_url: str, name: str | None) -> None:
+    """Create the demo collection a fresh core needs to not be an empty shell.
+
+    Idempotent: a collection whose slug already exists is left alone, so this is
+    safe on every `workspace up`.
+
+    Documents are not seeded. Ingestion needs an embedding model and an LLM key,
+    which the local stack does not configure.
+    """
+    try:
+        result = seed_collection(core_url, **({"name": name} if name else {}))
+    except SeedError as exc:
+        _fail(str(exc))
+        return
+    _ok(f"collection {result.slug!r} {'created' if result.created else 'already present'}")
+
+
 def _default_bundle_dir(ext_dir: Path) -> Path:
     """Where `build` put the bundle: `<ext_dir>/build/<scope>-<version>`."""
     from oxtend.manifest_vendored import kernel_manifest_module
@@ -232,6 +815,24 @@ def _default_bundle_dir(ext_dir: Path) -> Path:
 
 
 def main() -> None:  # pragma: no cover - console_scripts entry point
+    # Register D-110, fixed at the source rather than documented as a workaround.
+    #
+    # Every result line here starts with U+2713 or U+2717. On a Windows console
+    # that is not UTF-8, writing one raises UnicodeEncodeError *after* the command
+    # has already done its work — so a successful build exits 1 with a traceback
+    # about a checkmark, and CI reports a failure with no failing step. The
+    # RUNBOOK's answer was to have every developer remember
+    # `export PYTHONIOENCODING=utf-8` before every invocation.
+    #
+    # errors="replace" rather than "strict": if a stream still cannot represent a
+    # mark, the right outcome is a mangled glyph, never a failed command.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, OSError):
+            # Not a reconfigurable TextIOWrapper — captured output under pytest,
+            # or a pipe someone replaced. Nothing to do and nothing to report.
+            pass
     cli()
 
 
