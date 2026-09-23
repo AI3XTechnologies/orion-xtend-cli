@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxtend"
-version = "0.1.0"
+version = "0.1.1"
 description = "Orion Xtend bundle CLI — validate, build, contract-test, sign, package, push"
 requires-python = ">=3.13"
 authors = [{ name = "AI3X Technologies" }]

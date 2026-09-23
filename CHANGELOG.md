@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/AI3XTechnologies/orion-xtend-cli/compare/v0.1.0...v0.1.1) (2026-09-01)
+
+
+### Bug Fixes
+
+* **build:** give the image core's wheel so it can actually build ([2aeecd7](https://github.com/AI3XTechnologies/orion-xtend-cli/commit/2aeecd7b5b5899f62ab2aba8ad8607eb952dfaf5))
+
 ## 0.1.0 (2026-09-01)
 
 
