@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 from oxtend.seed import SeedError, expected_slug, seed_collection
-from oxtend.workspace import WorkspaceError, load_workspace
+from oxtend.workspace import WorkspaceError, load_workspace, render_link_override
 
 # ---------------------------------------------------------------------------
 # Workspace file parsing
@@ -242,3 +242,52 @@ def test_auth_failure_points_at_dev_auth_bypass(server: str) -> None:
 def test_unreachable_core_says_so(tmp_path: Path) -> None:
     with pytest.raises(SeedError, match="cannot reach"):
         seed_collection("http://127.0.0.1:1")
+
+
+# ---------------------------------------------------------------------------
+# `workspace link` — mounting bundles from the repo they live in
+# ---------------------------------------------------------------------------
+
+
+def _linked(tmp_path: Path) -> str:
+    root = _checkout(tmp_path, "x_demo")
+    ws = load_workspace(
+        _write(root, {"core": "platform/orion-core", "bundles": ["platform/x_demo"]})
+    )
+    return render_link_override(ws, [("x_demo", root / "platform" / "x_demo")])
+
+
+def test_link_mounts_the_source_dir_at_the_scope_path(tmp_path: Path) -> None:
+    assert "../x_demo:/extensions/x_demo:ro" in _linked(tmp_path)
+
+
+def test_link_turns_dev_mode_on(tmp_path: Path) -> None:
+    """Without it the kernel digests every file under the bundle dir, which a
+    working tree cannot satisfy — tests/, build/ and node_modules/ are all in it."""
+    assert 'ORION_KERNEL_DEV_MODE: "true"' in _linked(tmp_path)
+
+
+def test_link_redeclares_the_base_mount_read_write(tmp_path: Path) -> None:
+    """compose.local.yaml mounts /extensions :ro, and runc cannot create a nested
+    mountpoint under a read-only parent — it fails with `make mountpoint ...:
+    read-only file system`, which reads as permissions and is really mount ordering.
+    Compose merges volumes by target, so naming /extensions again replaces it."""
+    rendered = _linked(tmp_path)
+    assert "./extensions:/extensions:rw" in rendered
+    assert "/extensions:ro" not in rendered.replace("/extensions/x_demo:ro", "")
+
+
+def test_link_paths_are_relative_to_the_core_checkout(tmp_path: Path) -> None:
+    """Compose resolves a relative bind source against the file's directory, and the
+    override is written into the core checkout. Bundles are sibling repos, so the
+    path has to climb out — which Path.relative_to cannot do."""
+    rendered = _linked(tmp_path)
+    assert str(tmp_path) not in rendered, "absolute host paths would not port between machines"
+    assert "- ../" in rendered
+
+
+def test_link_says_it_is_generated_and_unverified(tmp_path: Path) -> None:
+    rendered = _linked(tmp_path)
+    assert "GENERATED" in rendered
+    assert "do not commit" in rendered
+    assert "ORION_KERNEL_DEV_MODE" in rendered

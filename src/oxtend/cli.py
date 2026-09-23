@@ -58,9 +58,11 @@ from oxtend.sign import SigningError, sign_bundle
 from oxtend.validate import validate_bundle
 from oxtend.workspace import (
     DEFAULT_FILE,
+    LINK_FILE,
     WorkspaceError,
     compose,
     load_workspace,
+    render_link_override,
     wait_for_core,
 )
 
@@ -703,6 +705,50 @@ def workspace_down(workspace_file: Path | None, volumes: bool) -> None:
         _fail(str(exc), code=EXIT_TOOLING)
         return
     _ok("workspace down" + (" (volumes removed)" if volumes else ""))
+
+
+@workspace.command(name="link")
+@_WORKSPACE_OPTION
+@click.option("--print", "to_stdout", is_flag=True, help="Print the override instead of writing it.")
+def workspace_link(workspace_file: Path | None, to_stdout: bool) -> None:
+    """Mount every bundle from the repo it lives in — no build, no copy.
+
+    Writes a compose override that bind-mounts each bundle straight into
+    /extensions/<scope> and turns on ORION_KERNEL_DEV_MODE. After this, editing a
+    field, a migration or a manifest is visible to the container immediately and
+    `oxtend dev` only has to POST the reinstall.
+
+    Dev mode is required because the kernel's digest hashes every file under a
+    bundle directory — right for a built bundle, impossible for a working tree that
+    also holds tests/, build/ and node_modules/. The ledger records
+    `dev:unverified` instead, and the kernel re-verifies any such row once dev mode
+    is off. Local only: an unverified bundle directory is arbitrary code.
+    """
+    try:
+        ws = load_workspace(_find_workspace(workspace_file))
+        scopes = [(load_scope(b)[0], b) for b in ws.bundles]
+    except WorkspaceError as exc:
+        _fail(str(exc), code=EXIT_TOOLING)
+        return
+    if not scopes:
+        _fail("the workspace lists no bundles, so there is nothing to link", code=EXIT_TOOLING)
+        return
+
+    rendered = render_link_override(ws, scopes)
+    if to_stdout:
+        click.echo(rendered)
+        return
+
+    target = ws.core_dir / LINK_FILE
+    target.write_text(rendered, encoding="utf-8", newline="")
+    _ok(f"wrote {target}")
+    for scope, path in scopes:
+        click.echo(f"  {scope} ← {path}")
+    click.echo(
+        f"\nbring the stack up with both files, from {ws.core_dir}:\n"
+        f"  docker compose -f {ws.compose_file} -f {LINK_FILE} up -d\n"
+        f"\nORION_KERNEL_DEV_MODE is on in that override. Bundles are NOT verified."
+    )
 
 
 @workspace.command(name="list")
