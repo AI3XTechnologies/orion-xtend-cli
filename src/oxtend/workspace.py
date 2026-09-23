@@ -122,6 +122,11 @@ _LINK_HEADER = """\
 # Never use this anywhere real: an unverified bundle directory is arbitrary code
 # with a router.
 #
+# Expect empty <core>/extensions/<scope>/ directories to appear: /extensions is
+# bound read-write (see below) so runc creates each nested mountpoint there, and
+# that propagates to the host. They are stubs, they stay empty, and they are
+# already gitignored.
+#
 # Regenerate with `oxtend workspace link`; bring the stack up with BOTH files:
 #   docker compose -f compose.local.yaml -f {link} up -d
 """
@@ -164,9 +169,24 @@ def render_link_override(ws: Workspace, scopes: list[tuple[str, Path]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def is_linked(ws: Workspace) -> bool:
+    """Whether `oxtend workspace link` has been run for this core checkout."""
+    return (ws.core_dir / LINK_FILE).is_file()
+
+
 def compose(ws: Workspace, *args: str, check: bool = True) -> int:
-    """Run `docker compose -f <file> <args>` in the core checkout."""
-    cmd = ["docker", "compose", "-f", ws.compose_file, *args]
+    """Run `docker compose -f <file> [-f <link file>] <args>` in the core checkout.
+
+    The link override is included automatically whenever it exists. Leaving that to
+    the caller meant `oxtend workspace link` followed by `oxtend workspace up`
+    silently started a stack with neither the source mounts nor dev mode, then built
+    the bundles into <core>/extensions the old way — the exact thing link exists to
+    avoid, with nothing on screen to say the override had been ignored.
+    """
+    files = ["-f", ws.compose_file]
+    if is_linked(ws):
+        files += ["-f", LINK_FILE]
+    cmd = ["docker", "compose", *files, *args]
     try:
         proc = subprocess.run(cmd, cwd=ws.core_dir, check=False)
     except FileNotFoundError as exc:

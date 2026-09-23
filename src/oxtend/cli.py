@@ -17,6 +17,14 @@ and the local development loop:
     oxtend dev           <ext_dir> --core DIR
     oxtend reset         <scope> [--yes]
 
+and the whole-checkout loop, driven by workspace.yaml:
+
+    oxtend workspace up  [--no-core] [--no-seed] [--build]
+    oxtend workspace link                  # bundles from their own repos, no build
+    oxtend workspace list
+    oxtend workspace down [-v]
+    oxtend seed          [--name NAME]
+
 Exit codes are the interface CI actually consumes: 0 success, 1 validation/contract
 failure, 2 tooling failure (cosign absent, no container CLI). A build tool that
 returns 0 on a soft failure is a build tool that ships broken artifacts.
@@ -61,6 +69,7 @@ from oxtend.workspace import (
     LINK_FILE,
     WorkspaceError,
     compose,
+    is_linked,
     load_workspace,
     render_link_override,
     wait_for_core,
@@ -645,6 +654,13 @@ def workspace_up(
         _fail(str(exc), code=EXIT_TOOLING)
         return
 
+    linked = is_linked(ws)
+    if linked:
+        click.echo(
+            f"{LINK_FILE} present — bundles mount from their own repos and "
+            f"ORION_KERNEL_DEV_MODE is on. Digests are NOT verified."
+        )
+
     if not no_core:
         click.echo(f"starting core: docker compose -f {ws.compose_file} up -d")
         try:
@@ -667,7 +683,11 @@ def workspace_up(
         scope, version = load_scope(bundle)
         try:
             ctx.invoke(validate, ext_dir=bundle, core_version=core_version)
-            sync_bundle(bundle, ws.core_dir, skip_ui=skip_ui, core_version=core_version)
+            # Linked: the bundle is already mounted from its own repo, so building
+            # it into <core>/extensions would write a second copy the container
+            # cannot even see — the per-scope mount shadows that path. Install only.
+            if not linked:
+                sync_bundle(bundle, ws.core_dir, skip_ui=skip_ui, core_version=core_version)
             result = install_bundle(scope, core_url=ws.core_url, internal_key=None)
         except (BuildError, DevLoopError, click.ClickException) as exc:
             # One bad bundle must not strand the rest: the common case is a
