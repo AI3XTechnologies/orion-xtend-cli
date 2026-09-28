@@ -17,7 +17,10 @@ dependencies = [
     # tests/test_validate_pin_matches.py asserts the installed version is inside
     # it, and the core repo carries the mirror-image assertion. A pin only one
     # side checks is a pin that drifts.
-    "orion-backend>=0.7.0,<1.0.0",
+    # >=1.0.0.dev2,<2.0: core's release line has been 1.0.0-dev.N since the fork, and
+    # PEP 440 puts 1.0.0.dev2 *below* 1.0.0, so the old `<1.0.0` excluded every core
+    # release the bundles target (register D-108). Same window as their core.compat.
+    "orion-backend>=1.0.0.dev2,<2.0",
 ]
 
 [project.optional-dependencies]
