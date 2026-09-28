@@ -48,7 +48,7 @@ pytestmark = pytest.mark.skipif(
 
 def test_core_wheel_is_installed() -> None:
     version = installed_core_version()
-    assert Version(version) >= Version("0.7.0"), (
+    assert Version(version) >= Version("1.0.0.dev2"), (
         f"{CORE_DISTRIBUTION} {version} is older than the manifest contract this CLI vendors"
     )
 
