@@ -73,13 +73,26 @@ def is_signed(bundle_dir: Path) -> bool:
     return (Path(bundle_dir) / f"{BUNDLE_JSON}{SIGNATURE_SUFFIX}").is_file()
 
 
-def verify_bundle(bundle_dir: Path, *, key: str | None = None, identity: str | None = None,
-                  issuer: str | None = None) -> bool:
+def verify_bundle(
+    bundle_dir: Path,
+    *,
+    key: str | None = None,
+    identity: str | None = None,
+    identity_regexp: str | None = None,
+    issuer: str | None = None,
+) -> bool:
     """Verify the bundle's signature the same way the kernel will.
 
-    Used by `oxtend sign --verify` and by CI as a post-sign sanity check: a signature
-    that the kernel would reject is worse than no signature, because it passes the
-    release gate and fails at install.
+    Used by `oxtend sign --verify`, by CI as a post-sign sanity check, and by
+    `oxtend assemble` before a bundle goes into a release image: a signature that the
+    kernel would reject is worse than no signature, because it passes the release gate
+    and fails at install.
+
+    Keyless verification passes the signing certificate `sign_bundle` wrote beside the
+    signature (`bundle.json.pem`). cosign needs the certificate (or a bundle) to verify a
+    keyless blob signature; without it the identity flags have nothing to check against.
+    `identity_regexp` exists because bundles are published from several repositories and
+    an exact identity can name only one, the same reason the kernel takes a regexp.
     """
     bundle_dir = Path(bundle_dir)
     sig = bundle_dir / f"{BUNDLE_JSON}{SIGNATURE_SUFFIX}"
@@ -88,12 +101,19 @@ def verify_bundle(bundle_dir: Path, *, key: str | None = None, identity: str | N
     cmd = [_cosign(), "verify-blob", "--signature", str(sig)]
     if key:
         cmd += ["--key", key]
-    elif identity and issuer:
-        cmd += ["--certificate-identity", identity, "--certificate-oidc-issuer", issuer]
+    elif (identity or identity_regexp) and issuer:
+        cert = bundle_dir / f"{BUNDLE_JSON}{CERTIFICATE_SUFFIX}"
+        if not cert.is_file():
+            return False
+        cmd += ["--certificate", str(cert), "--certificate-oidc-issuer", issuer]
+        if identity:
+            cmd += ["--certificate-identity", identity]
+        else:
+            cmd += ["--certificate-identity-regexp", identity_regexp]
     else:
         raise SigningError(
-            "verification needs either --key or both --identity and --issuer; without a pinned "
-            "identity cosign would accept any signer"
+            "verification needs either --key or an identity (exact or regexp) plus --issuer; "
+            "without a pinned identity cosign would accept any signer"
         )
     cmd.append(str(bundle_dir / BUNDLE_JSON))
     return subprocess.run(cmd, capture_output=True, text=True, timeout=300).returncode == 0
