@@ -167,9 +167,9 @@ def test_assembles_both_images_from_digests(bom, registry) -> None:
     backend = next(d for d in dockerfiles if "org.orion.release.target=\"backend\"" in d)
     assert f"FROM {REGISTRY}/orion-core/orion-backend@sha256:" in backend
     assert ":1.0.0" not in backend.split("FROM", 3)[-1].split("\n", 1)[0], "the base is pinned by digest"
-    assert "COPY --from=bundle_x_acme /bundle /extensions/x_acme" in backend
-    assert "COPY --from=bundle_x_addon /bundle /extensions/x_addon" in backend
-    assert "COPY release.json /extensions/release.json" in backend
+    assert "COPY --from=bundle_x_acme --chown=0:0 --chmod=u=rwX,go=rX /bundle /extensions/x_acme" in backend
+    assert "COPY --from=bundle_x_addon --chown=0:0 --chmod=u=rwX,go=rX /bundle /extensions/x_addon" in backend
+    assert "COPY --chown=0:0 --chmod=u=rwX,go=rX release.json /extensions/release.json" in backend
     assert "ENV BACKEND_VERSION=1.0.0" in backend
 
 

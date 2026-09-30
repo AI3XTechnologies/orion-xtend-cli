@@ -59,6 +59,11 @@ def published(tmp_path, make_source, manifest):
     ext = make_source({**manifest, "scope": "x_addon", "version": "1.2.0", "capabilities": {}})
     for src, out in ((client, "x_acme"), (ext, "x_addon")):
         built = build_bundle(src, tmp_path / "built" / out, skip_ui=True)
+        if out == "x_addon":
+            # The modes a bundle arrives with are the building machine's: cosign leaves its
+            # signature 0600 and a Windows-mounted checkout shows every file as 0777.
+            (built / "oxtend.yaml").chmod(0o600)
+            (built / "bundle.json").chmod(0o777)
         tag = package_bundle(built, REGISTRY)
         _docker("push", tag)
 
@@ -109,3 +114,12 @@ def test_assembles_and_pushes_release_images_the_kernel_accepts(published) -> No
         assert parsed.id == result.release["id"]
         listing = _docker("run", "--rm", ref, "ls", "/extensions/x_acme", "/extensions/x_addon")
         assert "oxtend.yaml" in listing and "bundle.json" in listing
+
+        # As the kernel's user: everything readable, nothing writable, whatever the bundle's
+        # own modes were.
+        unreadable = _docker("run", "--rm", "--user", "1000", ref, "find", "/extensions", "!", "-perm", "-o+r")
+        assert unreadable.strip() == "", f"unreadable by the app user: {unreadable}"
+        writable = _docker("run", "--rm", ref, "find", "/extensions", "-perm", "-o+w")
+        assert writable.strip() == "", f"writable by the app user: {writable}"
+        owners = _docker("run", "--rm", ref, "find", "/extensions", "!", "-user", "0")
+        assert owners.strip() == "", f"not root-owned: {owners}"

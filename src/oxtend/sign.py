@@ -66,6 +66,12 @@ def sign_bundle(bundle_dir: Path, *, key: str | None = None) -> Path:
         )
     if not sig_path.is_file():
         raise SigningError(f"cosign reported success but {sig_path} was not written")
+    # cosign writes both files owner-only (0600). They are public by design — a signature
+    # proves nothing if it cannot be read — and the kernel reads them as the app user, not
+    # the user who signed; left at 0600, every install fails with "permission denied".
+    for public in (sig_path, bundle_dir / f"{BUNDLE_JSON}{CERTIFICATE_SUFFIX}"):
+        if public.is_file():
+            public.chmod(0o644)
     return sig_path
 
 

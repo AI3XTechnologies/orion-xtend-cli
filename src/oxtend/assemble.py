@@ -51,6 +51,10 @@ from oxtend.package import NAMESPACE_BY_KIND
 
 CORE_IMAGES = {"backend": "orion-backend", "pipeline": "orion-pipeline"}
 TARGETS = ("backend", "pipeline")
+#: Ownership and modes for everything assembled under /extensions: root-owned, readable
+#: (and traversable) by everyone, writable only by root. BuildKit applies them on COPY,
+#: so no RUN step and no shell in the core image are needed.
+BUNDLE_COPY_FLAGS = "--chown=0:0 --chmod=u=rwX,go=rX"
 
 
 class AssemblyError(RuntimeError):
@@ -397,9 +401,15 @@ def dockerfile(target: str, plan: Plan, release: dict[str, Any]) -> str:
     base = plan.core_refs[target]
     lines.append(f"FROM {base}")
     for b in plan.bundles:
-        # Root-owned and not writable by the app user: the release is immutable.
-        lines.append(f"COPY --from={_stage(b.pin.scope)} /bundle /extensions/{b.pin.scope}")
-    lines.append("COPY release.json /extensions/release.json")
+        # Root-owned, readable by the app user and writable by nobody else: the release is
+        # immutable. Set here rather than trusted from the bundle image, whose modes are
+        # whatever the machine that built it had — 0600 from cosign on the signature, 0777
+        # from a Windows-mounted checkout — and the kernel runs as uid 1000.
+        lines.append(
+            f"COPY --from={_stage(b.pin.scope)} {BUNDLE_COPY_FLAGS}"
+            f" /bundle /extensions/{b.pin.scope}"
+        )
+    lines.append(f"COPY {BUNDLE_COPY_FLAGS} release.json /extensions/release.json")
     # The version is a fact of the image, so the chart does not have to repeat it.
     lines.append(f"ENV BACKEND_VERSION={plan.bom.core_version}")
     labels = {
