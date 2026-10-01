@@ -27,7 +27,7 @@ maintainer finds out from those release notes.
 
 ## 2. Let release-please open the PR
 
-Pushing to `main` triggers `.github/workflows/release-please.yml`. Review the generated
+Pushing to `main` triggers `.github/workflows/release.yml`. Review the generated
 changelog: every entry should be traceable to a Conventional Commit. An empty changelog
 means a PR title did not parse.
 

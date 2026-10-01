@@ -61,8 +61,8 @@ jobs:
           fi
 
       - name: Test
-        # cosign/docker-dependent tests are deselected here and covered by the
-        # release job, which has both.
+        # cosign/docker-dependent tests are deselected here and run in their own jobs
+        # below, which have the tools.
         run: pytest -q -m "not requires_cosign and not requires_docker"
 
   cosign-tests:
@@ -84,3 +84,36 @@ jobs:
           pip install -e '.[dev]'
       - name: Sign/verify round-trip against a real cosign
         run: pytest -q -m requires_cosign
+
+  # The docker-dependent tests (`oxtend assemble` end to end). Deselected from `test`
+  # because they need a daemon and a registry; they used to be claimed by the release job,
+  # which runs no tests, so they never ran anywhere.
+  docker-tests:
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports: ["5000:5000"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: docker/setup-buildx-action@v3
+        with:
+          # The default docker driver pushes through dockerd, which already treats
+          # localhost registries as plain HTTP; a container driver would not.
+          driver: docker
+      - uses: actions/checkout@v4
+        with:
+          repository: AI3XTechnologies/orion-core
+          ref: ${{ vars.CORE_REF || 'main' }}
+          path: .core
+          token: ${{ secrets.CORE_READ_TOKEN }}
+      - run: |
+          pip install ./.core/backend
+          pip install -e '.[dev]'
+      - name: Assemble against a real registry
+        env:
+          ORION_TEST_REGISTRY: localhost:5000
+        run: pytest -q -m requires_docker -rs
