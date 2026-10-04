@@ -8,6 +8,7 @@ binary or a registry are marked and skipped rather than mocked into meaninglessn
 from __future__ import annotations
 
 import json
+import os
 import shutil
 
 import pytest
@@ -85,7 +86,7 @@ def test_missing_cosign_is_a_clear_error(make_source, manifest) -> None:
 
 @pytest.mark.requires_cosign
 @pytest.mark.skipif(not _HAS_COSIGN, reason="needs a real cosign binary")
-def test_sign_then_verify_roundtrip(make_source, manifest, tmp_path) -> None:
+def test_sign_then_verify_roundtrip(make_source, manifest, tmp_path, monkeypatch) -> None:
     """Signed bundle verifies; a tampered one does not. Runs only where cosign exists,
     because a mocked cosign proves nothing about the real verification path."""
     import subprocess
@@ -97,11 +98,18 @@ def test_sign_then_verify_roundtrip(make_source, manifest, tmp_path) -> None:
         ["cosign", "generate-key-pair", "--output-key-prefix", str(key_base)],
         check=True,
         capture_output=True,
-        env={"COSIGN_PASSWORD": ""},
+        # Extend the environment rather than replace it: a bare env has no PATH, so the
+        # test only found cosign where it happened to sit in a default system directory.
+        env={**os.environ, "COSIGN_PASSWORD": ""},
     )
     bundle = build_bundle(make_source(manifest), skip_ui=True)
+    # sign_bundle passes its own environment to cosign, which prompts for the key's
+    # passphrase (and fails without a terminal) unless COSIGN_PASSWORD is set there too.
+    monkeypatch.setenv("COSIGN_PASSWORD", "")
     sign_bundle(bundle, key=f"{key_base}.key")
     assert verify_bundle(bundle, key=f"{key_base}.pub") is True
+    # cosign writes 0600; the kernel reads the signature as the app user, not the signer.
+    assert (bundle / "bundle.json.sig").stat().st_mode & 0o777 == 0o644
 
     meta = json.loads((bundle / "bundle.json").read_text())
     meta["digest"] = "sha256:" + "0" * 64

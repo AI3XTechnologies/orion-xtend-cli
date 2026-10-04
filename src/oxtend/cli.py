@@ -10,6 +10,10 @@
     oxtend push          <ext_dir> --registry HOST [--allow-unsigned]
     oxtend all           <ext_dir> --registry HOST
 
+a tenant's release, from its BOM:
+
+    oxtend assemble      --bom tenants/<tenant>/<env>.yaml --registry HOST [--verify-key K]
+
 and the local development loop:
 
     oxtend doctor        [--core DIR]
@@ -262,6 +266,96 @@ def run_all(
         ctx.invoke(sign, ext_dir=ext_dir, bundle_dir=None, key=key)
     ctx.invoke(package, ext_dir=ext_dir, registry=registry, bundle_dir=None)
     ctx.invoke(push, ext_dir=ext_dir, registry=registry, bundle_dir=None, allow_unsigned=allow_unsigned)
+
+
+@cli.command()
+@click.option(
+    "--bom",
+    "bom_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The tenant BOM, e.g. orion-gitops/tenants/demo/dev.yaml.",
+)
+@click.option("--registry", required=True, help="e.g. ghcr.io/ai3xtechnologies")
+@click.option("--core-namespace", default="orion-core", show_default=True)
+@click.option("--out-namespace", default="orion-releases", show_default=True)
+@click.option("--platform", "platforms", multiple=True, help="Limit to these platforms (repeatable).")
+@click.option("--verify-key", default=None, help="Public key the bundles were signed with.")
+@click.option("--identity-regexp", default=None, help="Keyless signer identity pattern.")
+@click.option("--issuer", default=None, help="Keyless OIDC issuer.")
+@click.option(
+    "--allow-unsigned",
+    is_flag=True,
+    help="Skip bundle signature checks. Local harness only — CI never passes this.",
+)
+@click.option("--sign-key", default=None, help="Sign the release images with this key (else keyless).")
+@click.option("--no-sign", "no_sign", is_flag=True, help="Do not sign the release images.")
+@click.option("--no-push", "no_push", is_flag=True, help="Build locally instead of pushing.")
+@click.option(
+    "--insecure-registry",
+    is_flag=True,
+    help="The registry speaks plain HTTP (a local registry). Never for a real one.",
+)
+@click.option(
+    "--output",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=Path("assembly.json"),
+    show_default=True,
+    help="Where to write the result: release id and the image digests.",
+)
+@click.option("--work-dir", type=click.Path(file_okay=False, path_type=Path), default=None)
+def assemble(
+    bom_path: Path,
+    registry: str,
+    core_namespace: str,
+    out_namespace: str,
+    platforms: tuple[str, ...],
+    verify_key: str | None,
+    identity_regexp: str | None,
+    issuer: str | None,
+    allow_unsigned: bool,
+    sign_key: str | None,
+    no_sign: bool,
+    no_push: bool,
+    insecure_registry: bool,
+    output: Path,
+    work_dir: Path | None,
+) -> None:
+    """Build a tenant's release images (backend + pipeline) from its BOM."""
+    from oxtend.assemble import AssemblyError, Verifier
+    from oxtend.assemble import assemble as run_assembly
+
+    verifier = Verifier(
+        key=verify_key, identity_regexp=identity_regexp, issuer=issuer, allow_unsigned=allow_unsigned
+    )
+    try:
+        result = run_assembly(
+            bom_path,
+            registry=registry,
+            core_namespace=core_namespace,
+            out_namespace=out_namespace,
+            verifier=verifier,
+            push=not no_push,
+            sign_key=sign_key,
+            sign=not no_sign,
+            insecure_registry=insecure_registry,
+            platforms=list(platforms) or None,
+            work_dir=work_dir,
+        )
+    except AssemblyError as exc:
+        _fail(str(exc), EXIT_INVALID)
+        return
+    except VendoredKernelUnavailable as exc:
+        _fail(str(exc), EXIT_TOOLING)
+        return
+    output.write_text(json.dumps(result.as_json(), indent=2) + "\n", encoding="utf-8")
+    if allow_unsigned:
+        _warn("bundle signatures were NOT verified — this release must not leave a local harness")
+    if no_sign and not no_push:
+        _warn("release images were pushed unsigned")
+    for target, ref in result.images.items():
+        _ok(f"{target}: {ref}")
+    _ok(f"release {result.release['id'][:19]} → {output}")
 
 
 @cli.command(name="add-field")
