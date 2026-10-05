@@ -113,6 +113,84 @@ def test_path_parameter_names_need_not_match(make_source, manifest, core_openapi
     assert result.ok, result.errors
 
 
+def test_an_f_string_endpoint_is_read_whole(make_source, manifest, core_openapi) -> None:
+    """The literal pieces of an f-string are separate ast.Constant nodes, so collecting
+    Constants alone turned f"/api/v1/documents/{doc_id}" into "/api/v1/documents/" — a
+    prefix that can never match a parameterised route. It was reported absent while being
+    present (register D-83)."""
+    source = make_source(
+        manifest,
+        python={
+            "x_fixture/__init__.py": "",
+            "x_fixture/api.py": (
+                "def get(client, doc_id):\n"
+                "    return client.get(f'/api/v1/documents/{doc_id}')\n"
+            ),
+        },
+    )
+    result = run_contract_test(source, core_version=CORE, openapi=core_openapi)
+    assert result.ok, result.errors
+
+
+def test_a_path_joined_to_another_base_url_is_not_core(
+    make_source, manifest, core_openapi
+) -> None:
+    """f"{self._airflow_base_url}/api/v1/dags/..." is a call to Airflow. Reading the
+    f-string whole yields "{}/api/v1/dags/...", which _CORE_PATH_RE does not match
+    because it is anchored at ^/ — the old reading attributed any /api/v1/... text to
+    core regardless of what it was joined to."""
+    source = make_source(
+        manifest,
+        python={
+            "x_fixture/__init__.py": "",
+            "x_fixture/api.py": (
+                "def trigger(base):\n"
+                "    return f'{base}/api/v1/dags/some_dag/dagRuns'\n"
+            ),
+        },
+    )
+    result = run_contract_test(source, core_version=CORE, openapi=core_openapi)
+    assert result.ok, result.errors
+
+
+def test_a_string_inside_an_interpolation_is_not_an_endpoint(
+    make_source, manifest, core_openapi
+) -> None:
+    """An interpolation's own constants name a dict key, not a route. Emitting them as
+    standalone literals would check them as endpoints."""
+    source = make_source(
+        manifest,
+        python={
+            "x_fixture/__init__.py": "",
+            "x_fixture/api.py": (
+                "def pick(d):\n"
+                "    return f'{d[chr(47)]}'\n"
+            ),
+        },
+    )
+    result = run_contract_test(source, core_version=CORE, openapi=core_openapi)
+    assert result.ok, result.errors
+
+
+def test_an_f_string_naming_a_missing_endpoint_still_fails(
+    make_source, manifest, core_openapi
+) -> None:
+    """Reading f-strings whole must not stop the check finding a real break."""
+    source = make_source(
+        manifest,
+        python={
+            "x_fixture/__init__.py": "",
+            "x_fixture/api.py": (
+                "def get(client, x):\n"
+                "    return client.get(f'/api/v1/gone/{x}')\n"
+            ),
+        },
+    )
+    result = run_contract_test(source, core_version=CORE, openapi=core_openapi)
+    assert not result.ok
+    assert any("/api/v1/gone/" in e for e in result.errors), result.errors
+
+
 def test_own_scope_paths_are_not_checked(make_source, manifest, core_openapi) -> None:
     source = make_source(
         manifest,

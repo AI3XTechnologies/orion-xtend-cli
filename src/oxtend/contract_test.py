@@ -108,11 +108,50 @@ def _check_symbols(ext_dir: Path, result: ContractResult) -> None:
 
 
 def _string_literals(tree: ast.AST) -> list[str]:
-    return [
+    """Every string the code names a path with — an f-string counted as ONE string.
+
+    `ast.walk` yields a JoinedStr's literal pieces as separate `ast.Constant` nodes, so
+    collecting Constants alone tears `f"/api/v1/citations/{quote(slug)}/object"` into
+    `"/api/v1/citations/"` and `"/object"`. The first looks exactly like a core path and
+    can never match a parameterised route, so the check reported an endpoint that is
+    there as absent — every false violation ended precisely where an interpolation began
+    (register D-83).
+
+    Rebuilding the f-string with `{}` for each interpolation fixes the mirror case for
+    free: `f"{self._airflow_base_url}/api/v1/dags/..."` becomes `"{}/api/v1/dags/..."`,
+    which `_CORE_PATH_RE` does not match because it is anchored at `^/`. That call is to
+    Airflow, not to core, and the old reading attributed any `/api/v1/...` text to core
+    regardless of what it was joined to.
+
+    Constants consumed by a JoinedStr are not emitted again on their own, including those
+    inside the interpolated expressions: `f"{d['slug']}"` names a dict key, not a route.
+    """
+    consumed: set[int] = set()
+    joined: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        parts: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            else:
+                # The interpolation itself is unknowable at this point; `{}` keeps the
+                # shape so the normaliser can line it up with core's `{param}` segments.
+                parts.append("{}")
+            consumed.update(
+                id(c) for c in ast.walk(value) if isinstance(c, ast.Constant)
+            )
+        joined.append("".join(parts))
+
+    plain = [
         n.value
         for n in ast.walk(tree)
-        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        if isinstance(n, ast.Constant)
+        and isinstance(n.value, str)
+        and id(n) not in consumed
     ]
+    return plain + joined
 
 
 def _check_endpoints(ext_dir: Path, openapi: dict[str, Any] | None, result: ContractResult) -> None:
