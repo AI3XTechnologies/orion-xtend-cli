@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/AI3XTechnologies/orion-xtend-cli/compare/v0.2.0...v0.2.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **contract-test:** read an f-string as one string, not as its pieces (D-83) ([33fd885](https://github.com/AI3XTechnologies/orion-xtend-cli/commit/33fd88535549b13a765a9792c1003d7a06e99f4b))
+* **contract-test:** read an f-string as one string, not as its pieces (D-83) ([ff51746](https://github.com/AI3XTechnologies/orion-xtend-cli/commit/ff517460df128a3400bb7570cea6df3275bac1be))
+
 ## [0.2.0](https://github.com/AI3XTechnologies/orion-xtend-cli/compare/v0.1.0...v0.2.0) (2026-10-05)
 
 
