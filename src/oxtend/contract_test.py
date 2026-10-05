@@ -108,7 +108,11 @@ def _check_symbols(ext_dir: Path, result: ContractResult) -> None:
 
 
 def _string_literals(tree: ast.AST) -> list[str]:
-    return [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    return [
+        n.value
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+    ]
 
 
 def _check_endpoints(ext_dir: Path, openapi: dict[str, Any] | None, result: ContractResult) -> None:
@@ -179,7 +183,9 @@ def _check_topics(manifest: Any, ext_dir: Path, result: ContractResult) -> None:
             name = getattr(func, "attr", None) or getattr(func, "id", None)
             if name not in ("emit", "guarded_subscribe", "subscribe"):
                 continue
-            args = [a for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            args = [
+                a for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)
+            ]
             if not args:
                 continue
             topic = args[-1].value if name != "emit" else args[0].value

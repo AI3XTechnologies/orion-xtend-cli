@@ -134,7 +134,13 @@ def validate(ext_dir: Path, core_version: str | None) -> None:
     help="Fail unless oxtend.lock is present and current. CI passes this on release builds.",
 )
 @click.pass_context
-def build(ctx: click.Context, ext_dir: Path, out_dir: Path | None, skip_ui: bool, require_lock: bool) -> None:
+def build(
+    ctx: click.Context,
+    ext_dir: Path,
+    out_dir: Path | None,
+    skip_ui: bool,
+    require_lock: bool,
+) -> None:
     """Compile the UI remote and assemble the bundle directory."""
     ctx.invoke(validate, ext_dir=ext_dir, core_version=None)
     if require_lock:
@@ -154,7 +160,9 @@ def build(ctx: click.Context, ext_dir: Path, out_dir: Path | None, skip_ui: bool
 
 @cli.command(name="contract-test")
 @click.argument("ext_dir", type=_DIR)
-@click.option("--core-version", required=True, help="The core version to test the contract against.")
+@click.option(
+    "--core-version", required=True, help="The core version to test the contract against."
+)
 @click.option(
     "--openapi",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
@@ -243,7 +251,9 @@ def push(ext_dir: Path, registry: str, bundle_dir: Path | None, allow_unsigned: 
 @click.argument("ext_dir", type=_DIR)
 @click.option("--registry", required=True)
 @click.option("--core-version", default=None)
-@click.option("--openapi", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
+@click.option(
+    "--openapi", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None
+)
 @click.option("--key", default=None)
 @click.option("--allow-unsigned", is_flag=True)
 @click.pass_context
@@ -265,7 +275,9 @@ def run_all(
     if not allow_unsigned:
         ctx.invoke(sign, ext_dir=ext_dir, bundle_dir=None, key=key)
     ctx.invoke(package, ext_dir=ext_dir, registry=registry, bundle_dir=None)
-    ctx.invoke(push, ext_dir=ext_dir, registry=registry, bundle_dir=None, allow_unsigned=allow_unsigned)
+    ctx.invoke(
+        push, ext_dir=ext_dir, registry=registry, bundle_dir=None, allow_unsigned=allow_unsigned
+    )
 
 
 @cli.command()
@@ -279,7 +291,9 @@ def run_all(
 @click.option("--registry", required=True, help="e.g. ghcr.io/ai3xtechnologies")
 @click.option("--core-namespace", default="orion-core", show_default=True)
 @click.option("--out-namespace", default="orion-releases", show_default=True)
-@click.option("--platform", "platforms", multiple=True, help="Limit to these platforms (repeatable).")
+@click.option(
+    "--platform", "platforms", multiple=True, help="Limit to these platforms (repeatable)."
+)
 @click.option("--verify-key", default=None, help="Public key the bundles were signed with.")
 @click.option("--identity-regexp", default=None, help="Keyless signer identity pattern.")
 @click.option("--issuer", default=None, help="Keyless OIDC issuer.")
@@ -288,7 +302,9 @@ def run_all(
     is_flag=True,
     help="Skip bundle signature checks. Local harness only — CI never passes this.",
 )
-@click.option("--sign-key", default=None, help="Sign the release images with this key (else keyless).")
+@click.option(
+    "--sign-key", default=None, help="Sign the release images with this key (else keyless)."
+)
 @click.option("--no-sign", "no_sign", is_flag=True, help="Do not sign the release images.")
 @click.option("--no-push", "no_push", is_flag=True, help="Build locally instead of pushing.")
 @click.option(
@@ -326,7 +342,10 @@ def assemble(
     from oxtend.assemble import assemble as run_assembly
 
     verifier = Verifier(
-        key=verify_key, identity_regexp=identity_regexp, issuer=issuer, allow_unsigned=allow_unsigned
+        key=verify_key,
+        identity_regexp=identity_regexp,
+        issuer=issuer,
+        allow_unsigned=allow_unsigned,
     )
     try:
         result = run_assembly(
@@ -823,7 +842,9 @@ def workspace_down(workspace_file: Path | None, volumes: bool) -> None:
 
 @workspace.command(name="link")
 @_WORKSPACE_OPTION
-@click.option("--print", "to_stdout", is_flag=True, help="Print the override instead of writing it.")
+@click.option(
+    "--print", "to_stdout", is_flag=True, help="Print the override instead of writing it."
+)
 def workspace_link(workspace_file: Path | None, to_stdout: bool) -> None:
     """Mount every bundle from the repo it lives in — no build, no copy.
 

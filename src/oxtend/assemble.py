@@ -40,7 +40,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -111,7 +111,11 @@ def load_bom(path: Path) -> Bom:
     bundle = (raw.get("client") or {}).get("bundle") or {}
     if bundle.get("scope"):
         pins.append(
-            BundlePin(str(bundle["scope"]), str(need(bundle, "version", "client.bundle.")), "client")
+            BundlePin(
+                str(bundle["scope"]),
+                str(need(bundle, "version", "client.bundle.")),
+                "client",
+            )
         )
     for i, ext in enumerate(raw.get("extensions") or []):
         pins.append(
@@ -188,7 +192,8 @@ class DockerImageTool:
             p = entry.get("platform") or {}
             if p.get("os") in (None, "unknown") or p.get("architecture") in (None, "unknown"):
                 continue  # attestation manifests, not images
-            found.append(f"{p['os']}/{p['architecture']}" + (f"/{p['variant']}" if p.get("variant") else ""))
+            variant = f"/{p['variant']}" if p.get("variant") else ""
+            found.append(f"{p['os']}/{p['architecture']}" + variant)
         if found:
             return found
         config = self._inspect(ref, "{{json .Image}}")
@@ -202,7 +207,10 @@ class DockerImageTool:
             [self.docker, "create", "--platform", platform, ref, "true"], what=f"create {ref}"
         ).strip()
         try:
-            _run([self.docker, "cp", f"{cid}:{path_in_image}", str(dest)], what=f"copy {path_in_image} out of {ref}")
+            _run(
+                [self.docker, "cp", f"{cid}:{path_in_image}", str(dest)],
+                what=f"copy {path_in_image} out of {ref}",
+            )
         finally:
             subprocess.run([self.docker, "rm", "-f", cid], capture_output=True, text=True)
 
@@ -383,7 +391,7 @@ def release_manifest(plan: Plan, *, assembled_at: str | None = None) -> dict[str
         tenant=plan.bom.tenant,
         core=core,
         bundles=bundles,
-        assembled_at=assembled_at or datetime.now(timezone.utc).isoformat(),
+        assembled_at=assembled_at or datetime.now(UTC).isoformat(),
         assembler=f"oxtend {__version__}",
     )
     return manifest.model_dump(mode="json")
@@ -419,7 +427,9 @@ def dockerfile(target: str, plan: Plan, release: dict[str, Any]) -> str:
         "org.orion.release.tenant": plan.bom.tenant,
         "org.orion.release.core": plan.bom.core_version,
         "org.orion.release.target": target,
-        "org.orion.release.bundles": ",".join(f"{b.pin.scope}@{b.pin.version}" for b in plan.bundles),
+        "org.orion.release.bundles": ",".join(
+            f"{b.pin.scope}@{b.pin.version}" for b in plan.bundles
+        ),
     }
     lines.append("LABEL " + " \\\n      ".join(f'{k}="{v}"' for k, v in labels.items()))
     return "\n".join(lines) + "\n"
@@ -473,7 +483,9 @@ def assemble(
     if platforms:
         missing = [p for p in platforms if p not in plan.core_platforms]
         if missing:
-            raise AssemblyError(f"core images are not built for {missing} (have {plan.core_platforms})")
+            raise AssemblyError(
+                f"core images are not built for {missing} (have {plan.core_platforms})"
+            )
         plan.core_platforms = list(platforms)
     if not push and len(plan.core_platforms) > 1:
         raise AssemblyError(

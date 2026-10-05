@@ -8,8 +8,6 @@ command, does not.
 
 from __future__ import annotations
 
-import pytest
-
 from oxtend.contract_test import run_contract_test
 
 CORE = "0.7.0"
@@ -53,7 +51,10 @@ def test_nonexistent_core_symbol_fails(make_source, manifest, core_openapi) -> N
 def test_nonexistent_core_module_fails(make_source, manifest, core_openapi) -> None:
     source = make_source(
         manifest,
-        python={"x_fixture/__init__.py": "", "x_fixture/api.py": "from orion.kernel.gone import x\n"},
+        python={
+            "x_fixture/__init__.py": "",
+            "x_fixture/api.py": "from orion.kernel.gone import x\n",
+        },
     )
     result = run_contract_test(source, core_version=CORE, openapi=core_openapi)
     assert not result.ok
@@ -103,7 +104,10 @@ def test_path_parameter_names_need_not_match(make_source, manifest, core_openapi
     would be noise, not a finding."""
     source = make_source(
         manifest,
-        python={"x_fixture/__init__.py": "", "x_fixture/api.py": "PATH = '/api/v1/documents/{id}'\n"},
+        python={
+            "x_fixture/__init__.py": "",
+            "x_fixture/api.py": "PATH = '/api/v1/documents/{id}'\n",
+        },
     )
     result = run_contract_test(source, core_version=CORE, openapi=core_openapi)
     assert result.ok, result.errors
@@ -158,7 +162,9 @@ def test_emit_call_on_an_undeclared_topic_fails(make_source, manifest, core_open
         manifest,
         python={
             "x_fixture/__init__.py": "",
-            "x_fixture/api.py": "async def go(emit):\n    await emit('x_fixture.not.declared', {})\n",
+            "x_fixture/api.py": (
+                "async def go(emit):\n    await emit('x_fixture.not.declared', {})\n"
+            ),
         },
     )
     result = run_contract_test(source, core_version=CORE, openapi=core_openapi)
@@ -171,7 +177,9 @@ def test_declared_emit_call_passes(make_source, manifest, core_openapi) -> None:
         manifest,
         python={
             "x_fixture/__init__.py": "",
-            "x_fixture/api.py": "async def go(emit):\n    await emit('x_fixture.thing.happened', {})\n",
+            "x_fixture/api.py": (
+                "async def go(emit):\n    await emit('x_fixture.thing.happened', {})\n"
+            ),
         },
     )
     result = run_contract_test(source, core_version=CORE, openapi=core_openapi)
@@ -186,7 +194,12 @@ def test_declared_emit_call_passes(make_source, manifest, core_openapi) -> None:
 def test_unsupported_field_type_fails(make_source, manifest, core_openapi) -> None:
     source = make_source(
         {**manifest, "provides": [{"knowledge-hive/fields": {"dir": "metadata/fields"}}]},
-        fields={"bad.field.yaml": {"entity": "documents", "field": {"name": "blobby", "type": "blob"}}},
+        fields={
+            "bad.field.yaml": {
+                "entity": "documents",
+                "field": {"name": "blobby", "type": "blob"},
+            }
+        },
     )
     result = run_contract_test(source, core_version=CORE, openapi=core_openapi)
     assert not result.ok
@@ -219,7 +232,10 @@ def test_out_of_range_core_is_reported_but_other_checks_still_run(
     narrow = {**manifest, "core": {"api": "v1", "compat": ">=99.0"}}
     source = make_source(
         narrow,
-        python={"x_fixture/__init__.py": "", "x_fixture/api.py": "from orion.kernel.manifest import Gone\n"},
+        python={
+            "x_fixture/__init__.py": "",
+            "x_fixture/api.py": "from orion.kernel.manifest import Gone\n",
+        },
     )
     result = run_contract_test(source, core_version=CORE, openapi=core_openapi)
     assert not result.ok

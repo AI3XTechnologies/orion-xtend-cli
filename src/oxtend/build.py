@@ -16,14 +16,38 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from oxtend.manifest_vendored import kernel_manifest_module
 
 #: Copied verbatim into the bundle when present.
-VERBATIM_DIRS = ("metadata", "migrations", "policies", "backend", "dags", "config", "assets", "prompt_config", "naming", "helm", "ops")
+VERBATIM_DIRS = (
+    "metadata", "migrations", "policies", "backend", "dags", "config",
+    "assets", "prompt_config", "naming", "helm", "ops",
+)
+
+#: Never copied, even from inside a VERBATIM_DIRS tree.
+#:
+#: `compute_bundle_digest` hashes every file under the bundle, so anything that
+#: lands here is *in the digest*. Bytecode is written by whichever interpreter
+#: last imported the source — so a bundle built after running the tests hashed
+#: differently from the same source built clean, and the same commit built on two
+#: machines produced two digests. The kernel then reports "the bundle was modified
+#: after it was built", which names tampering for what is really a stray
+#: __pycache__. That is register D-114's shape exactly, and D-114 was a sort order.
+#:
+#: `tests/` and `build/` are already excluded by not being in VERBATIM_DIRS; these
+#: are the ones that hide *inside* directories a bundle legitimately ships.
+BUILD_EXCLUDES = shutil.ignore_patterns(
+    "__pycache__",
+    "*.py[cod]",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".DS_Store",
+)
 
 BUNDLE_JSON = "bundle.json"
 
@@ -81,7 +105,8 @@ def build_bundle(
     ext_dir = Path(ext_dir)
     manifest = manifest_mod.load_manifest(ext_dir)
 
-    out_dir = Path(out_dir) if out_dir else ext_dir / "build" / f"{manifest.scope}-{manifest.version}"
+    default_out = ext_dir / "build" / f"{manifest.scope}-{manifest.version}"
+    out_dir = Path(out_dir) if out_dir else default_out
     if out_dir.exists():
         # A stale file from a previous build would be hashed into the digest and
         # shipped — always start from empty.
@@ -93,10 +118,12 @@ def build_bundle(
     for sub in VERBATIM_DIRS:
         src = ext_dir / sub
         if src.is_dir():
-            shutil.copytree(src, out_dir / sub)
+            shutil.copytree(src, out_dir / sub, ignore=BUILD_EXCLUDES)
     # A pre-built remote committed to the repo (no ui/ sources) still ships.
     if not ui_built and (ext_dir / "remotes").is_dir():
-        shutil.copytree(ext_dir / "remotes", out_dir / "remotes", dirs_exist_ok=True)
+        shutil.copytree(
+            ext_dir / "remotes", out_dir / "remotes", dirs_exist_ok=True, ignore=BUILD_EXCLUDES
+        )
 
     shutil.copy2(ext_dir / "oxtend.yaml", out_dir / "oxtend.yaml")
     for extra in ("oxtend.lock", "README.md", "RUNBOOK.md", "LICENSE"):
@@ -114,7 +141,7 @@ def build_bundle(
         "manifest": manifest.model_dump(mode="json"),
         # UTC and explicit: a bundle's build time is read by humans comparing two
         # artifacts, and a local-time stamp makes that comparison wrong by hours.
-        "built_at": datetime.now(timezone.utc).isoformat(),
+        "built_at": datetime.now(UTC).isoformat(),
         "core_compat": manifest.core.compat,
         "built_against_core": core_version,
         "ui_remote": ui_built or (out_dir / "remotes").is_dir(),

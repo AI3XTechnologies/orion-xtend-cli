@@ -76,7 +76,15 @@ class FakeRegistry:
         assert path_in_image == "/bundle"
         shutil.copytree(self.bundles[self._tag_for(ref)], dest)
 
-    def build(self, context: Path, dockerfile: Path, tag: str, platforms: list[str], *, push: bool) -> str:
+    def build(
+        self,
+        context: Path,
+        dockerfile: Path,
+        tag: str,
+        platforms: list[str],
+        *,
+        push: bool,
+    ) -> str:
         text = dockerfile.read_text()
         self.built[tag] = text
         release = (context / "release.json").read_text()
@@ -90,10 +98,16 @@ class FakeRegistry:
 def registry(tmp_path, make_source, manifest):
     reg = FakeRegistry()
     reg.add_core("1.0.0")
-    client = make_source({**manifest, "kind": "client", "scope": "x_acme", "version": "0.3.0", "capabilities": {}})
+    client = make_source(
+        {**manifest, "kind": "client", "scope": "x_acme", "version": "0.3.0", "capabilities": {}}
+    )
     ext = make_source({**manifest, "scope": "x_addon", "version": "1.2.0", "capabilities": {}})
-    reg.add_bundle(build_bundle(client, tmp_path / "built" / "x_acme", skip_ui=True), "orion-clients")
-    reg.add_bundle(build_bundle(ext, tmp_path / "built" / "x_addon", skip_ui=True), "orion-extensions")
+    reg.add_bundle(
+        build_bundle(client, tmp_path / "built" / "x_acme", skip_ui=True), "orion-clients"
+    )
+    reg.add_bundle(
+        build_bundle(ext, tmp_path / "built" / "x_addon", skip_ui=True), "orion-extensions"
+    )
     return reg
 
 
@@ -118,7 +132,13 @@ UNSIGNED = Verifier(allow_unsigned=True)
 
 
 def _run(bom: Path, registry: FakeRegistry, **kwargs: Any):
-    return assemble(bom, registry=REGISTRY, verifier=kwargs.pop("verifier", UNSIGNED), tool=registry, **kwargs)
+    return assemble(
+        bom,
+        registry=REGISTRY,
+        verifier=kwargs.pop("verifier", UNSIGNED),
+        tool=registry,
+        **kwargs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +149,10 @@ def _run(bom: Path, registry: FakeRegistry, **kwargs: Any):
 def test_load_bom_reads_the_release_pieces(bom) -> None:
     parsed = load_bom(bom)
     assert parsed.tenant == "acme" and parsed.core_version == "1.0.0"
-    assert [(p.scope, p.kind) for p in parsed.bundles] == [("x_acme", "client"), ("x_addon", "extension")]
+    assert [(p.scope, p.kind) for p in parsed.bundles] == [
+        ("x_acme", "client"),
+        ("x_addon", "extension"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -166,9 +189,17 @@ def test_assembles_both_images_from_digests(bom, registry) -> None:
     assert len(dockerfiles) == 2
     backend = next(d for d in dockerfiles if "org.orion.release.target=\"backend\"" in d)
     assert f"FROM {REGISTRY}/orion-core/orion-backend@sha256:" in backend
-    assert ":1.0.0" not in backend.split("FROM", 3)[-1].split("\n", 1)[0], "the base is pinned by digest"
-    assert "COPY --from=bundle_x_acme --chown=0:0 --chmod=u=rwX,go=rX /bundle /extensions/x_acme" in backend
-    assert "COPY --from=bundle_x_addon --chown=0:0 --chmod=u=rwX,go=rX /bundle /extensions/x_addon" in backend
+    assert ":1.0.0" not in backend.split("FROM", 3)[-1].split("\n", 1)[0], (
+        "the base is pinned by digest"
+    )
+    assert (
+        "COPY --from=bundle_x_acme --chown=0:0 --chmod=u=rwX,go=rX /bundle /extensions/x_acme"
+        in backend
+    )
+    assert (
+        "COPY --from=bundle_x_addon --chown=0:0 --chmod=u=rwX,go=rX /bundle /extensions/x_addon"
+        in backend
+    )
     assert "COPY --chown=0:0 --chmod=u=rwX,go=rX release.json /extensions/release.json" in backend
     assert "ENV BACKEND_VERSION=1.0.0" in backend
 
@@ -185,7 +216,12 @@ def test_release_json_is_the_kernels_model_and_one_id_for_both_images(bom, regis
         built = json.loads((registry.bundles[bundle.image.split("@")[0] + ":" + bundle.version]
                             / "bundle.json").read_text())
         assert bundle.digest == built["digest"]
-    ids = {line for d in registry.built.values() for line in d.splitlines() if "org.orion.release.id" in line}
+    ids = {
+        line
+        for d in registry.built.values()
+        for line in d.splitlines()
+        if "org.orion.release.id" in line
+    }
     assert len(ids) == 1, "backend and pipeline carry the same release id"
 
 
@@ -201,7 +237,9 @@ def test_result_json_records_what_promotion_needs(bom, registry) -> None:
     assert [b["scope"] for b in out["bundles"]] == ["x_acme", "x_addon"]
 
 
-def test_a_bundle_built_for_one_platform_still_goes_into_a_multi_platform_release(bom, registry) -> None:
+def test_a_bundle_built_for_one_platform_still_goes_into_a_multi_platform_release(
+    bom, registry
+) -> None:
     """Bundle content is data, so its stage is pinned to the platform it was built for."""
     tag = next(t for t in registry.bundles if "x_addon" in t)
     registry.platform_map[tag] = ["linux/amd64"]
@@ -238,9 +276,17 @@ def test_a_bundle_whose_kind_differs_from_its_pin_is_refused(bom, registry) -> N
         _run(bom, registry)
 
 
-def test_a_bundle_incompatible_with_the_core_is_refused(bom, registry, tmp_path, make_source, manifest) -> None:
+def test_a_bundle_incompatible_with_the_core_is_refused(
+    bom, registry, tmp_path, make_source, manifest
+) -> None:
     old = make_source(
-        {**manifest, "scope": "x_addon", "version": "1.2.0", "capabilities": {}, "core": {"api": "v1", "compat": "<0.9"}},
+        {
+            **manifest,
+            "scope": "x_addon",
+            "version": "1.2.0",
+            "capabilities": {},
+            "core": {"api": "v1", "compat": "<0.9"},
+        },
         name="old",
     )
     tag = next(t for t in registry.bundles if "x_addon" in t)

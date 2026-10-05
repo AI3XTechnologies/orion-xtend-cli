@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +82,7 @@ def write_lock(ext_dir: Path, *, core_version: str | None = None) -> Path:
             "resolved_version": core_version or installed_core_version(),
         },
         "ui": _ui_dependency_tree(ext_dir),
-        "locked_at": datetime.now(timezone.utc).isoformat(),
+        "locked_at": datetime.now(UTC).isoformat(),
     }
     path = ext_dir / LOCK_FILENAME
     path.write_text(yaml.safe_dump(payload, sort_keys=True))
@@ -107,7 +107,10 @@ def lock_is_current(ext_dir: Path) -> tuple[bool, str]:
     if lock is None:
         return False, f"{LOCK_FILENAME} is absent — run `oxtend lock`"
     if lock.get("lock_version") != LOCK_VERSION:
-        return False, f"{LOCK_FILENAME} is lock_version {lock.get('lock_version')}, expected {LOCK_VERSION}"
+        return False, (
+            f"{LOCK_FILENAME} is lock_version {lock.get('lock_version')}, "
+            f"expected {LOCK_VERSION}"
+        )
     current = manifest_digest(ext_dir)
     if lock.get("manifest_digest") != current:
         return False, (

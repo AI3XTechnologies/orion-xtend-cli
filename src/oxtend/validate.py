@@ -106,11 +106,14 @@ def _validate_declared_paths(ext_dir: Path, manifest: Any, result: ValidationRes
         )
     if dags := manifest.airflow_dags:
         if not (ext_dir / dags.dir).is_dir():
-            result.errors.append(f"provides knowledge-hive/airflow-dags: {dags.dir!r} is not in the bundle")
+            result.errors.append(
+                f"provides knowledge-hive/airflow-dags: {dags.dir!r} is not in the bundle"
+            )
         for decl in dags.dags:
             if decl.stage_definitions and not (ext_dir / decl.stage_definitions).is_file():
                 result.errors.append(
-                    f"DAG {decl.id}: stage_definitions {decl.stage_definitions!r} is not in the bundle"
+                    f"DAG {decl.id}: stage_definitions "
+                    f"{decl.stage_definitions!r} is not in the bundle"
                 )
     if manifest.backend_entrypoint and not (ext_dir / "backend" / "python").is_dir():
         result.errors.append(

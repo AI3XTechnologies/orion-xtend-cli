@@ -8,7 +8,6 @@ independent recomputation, the kernel trusts a wrong number.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -32,7 +31,10 @@ def test_digest_matches_independent_recomputation(make_source, manifest, scoped_
     from orion.kernel.digest import compute_bundle_digest
 
     source = make_source(
-        manifest, migrations={"0001_init.sql": scoped_sql("x_fixture", "CREATE TABLE x_fixture.t (id INT);")}
+        manifest,
+        migrations={
+            "0001_init.sql": scoped_sql("x_fixture", "CREATE TABLE x_fixture.t (id INT);")
+        },
     )
     bundle = build_bundle(source, skip_ui=True)
     claimed = json.loads((bundle / "bundle.json").read_text())["digest"]
@@ -51,7 +53,12 @@ def test_verbatim_directories_are_copied(make_source, manifest, scoped_sql) -> N
     source = make_source(
         manifest,
         migrations={"0001_init.sql": scoped_sql("x_fixture", "CREATE TABLE x_fixture.t (id INT);")},
-        fields={"region.field.yaml": {"entity": "documents", "field": {"name": "region", "type": "string"}}},
+        fields={
+            "region.field.yaml": {
+                "entity": "documents",
+                "field": {"name": "region", "type": "string"},
+            }
+        },
         python={"x_fixture/__init__.py": "", "x_fixture/api.py": "router = None\n"},
         dags={"x_fixture_ingest.py": "# dag\n"},
     )
