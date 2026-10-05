@@ -31,7 +31,10 @@ def manifest() -> dict[str, Any]:
             # real bundles were all updated then; this fixture was missed, and CI could
             # not catch it because the job that runs these tests has never checked out
             # core (no CORE_READ_TOKEN), so it has never run.
-            "events": {"emit": ["x_fixture.thing.happened"], "subscribe": ["core.collection.swapped"]}
+            "events": {
+                "emit": ["x_fixture.thing.happened"],
+                "subscribe": ["core.collection.swapped"],
+            }
         },
     }
 

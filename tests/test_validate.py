@@ -7,8 +7,6 @@ caught before install rather than after, and the deny-by-default events warning.
 
 from __future__ import annotations
 
-import pytest
-
 from oxtend.validate import validate_bundle
 
 
@@ -34,7 +32,9 @@ def test_out_of_scope_migration_is_reported_with_the_filename(
 ) -> None:
     source = make_source(
         manifest,
-        migrations={"0002_bad.sql": scoped_sql("x_fixture", "UPDATE public.documents SET title='x';")},
+        migrations={
+            "0002_bad.sql": scoped_sql("x_fixture", "UPDATE public.documents SET title='x';")
+        },
     )
     result = validate_bundle(source)
     assert not result.ok
@@ -74,7 +74,10 @@ def test_missing_stage_definitions_file_is_an_error(make_source, manifest) -> No
                     "knowledge-hive/airflow-dags": {
                         "dir": "dags/",
                         "dags": [
-                            {"id": "x_fixture_ingest", "stage_definitions": "dags/stages/missing.yaml"}
+                            {
+                                "id": "x_fixture_ingest",
+                                "stage_definitions": "dags/stages/missing.yaml",
+                            }
                         ],
                     }
                 }

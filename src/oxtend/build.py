@@ -16,14 +16,17 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from oxtend.manifest_vendored import kernel_manifest_module
 
 #: Copied verbatim into the bundle when present.
-VERBATIM_DIRS = ("metadata", "migrations", "policies", "backend", "dags", "config", "assets", "prompt_config", "naming", "helm", "ops")
+VERBATIM_DIRS = (
+    "metadata", "migrations", "policies", "backend", "dags", "config",
+    "assets", "prompt_config", "naming", "helm", "ops",
+)
 
 #: Never copied, even from inside a VERBATIM_DIRS tree.
 #:
@@ -102,7 +105,8 @@ def build_bundle(
     ext_dir = Path(ext_dir)
     manifest = manifest_mod.load_manifest(ext_dir)
 
-    out_dir = Path(out_dir) if out_dir else ext_dir / "build" / f"{manifest.scope}-{manifest.version}"
+    default_out = ext_dir / "build" / f"{manifest.scope}-{manifest.version}"
+    out_dir = Path(out_dir) if out_dir else default_out
     if out_dir.exists():
         # A stale file from a previous build would be hashed into the digest and
         # shipped — always start from empty.
@@ -137,7 +141,7 @@ def build_bundle(
         "manifest": manifest.model_dump(mode="json"),
         # UTC and explicit: a bundle's build time is read by humans comparing two
         # artifacts, and a local-time stamp makes that comparison wrong by hours.
-        "built_at": datetime.now(timezone.utc).isoformat(),
+        "built_at": datetime.now(UTC).isoformat(),
         "core_compat": manifest.core.compat,
         "built_against_core": core_version,
         "ui_remote": ui_built or (out_dir / "remotes").is_dir(),
