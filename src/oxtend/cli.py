@@ -291,7 +291,9 @@ def run_all(
 @click.option("--registry", required=True, help="e.g. ghcr.io/ai3xtechnologies")
 @click.option("--core-namespace", default="orion-core", show_default=True)
 @click.option("--out-namespace", default="orion-releases", show_default=True)
-@click.option("--platform", "platforms", multiple=True, help="Limit to these platforms (repeatable).")
+@click.option(
+    "--platform", "platforms", multiple=True, help="Limit to these platforms (repeatable)."
+)
 @click.option("--verify-key", default=None, help="Public key the bundles were signed with.")
 @click.option("--identity-regexp", default=None, help="Keyless signer identity pattern.")
 @click.option("--issuer", default=None, help="Keyless OIDC issuer.")
@@ -300,7 +302,9 @@ def run_all(
     is_flag=True,
     help="Skip bundle signature checks. Local harness only — CI never passes this.",
 )
-@click.option("--sign-key", default=None, help="Sign the release images with this key (else keyless).")
+@click.option(
+    "--sign-key", default=None, help="Sign the release images with this key (else keyless)."
+)
 @click.option("--no-sign", "no_sign", is_flag=True, help="Do not sign the release images.")
 @click.option("--no-push", "no_push", is_flag=True, help="Build locally instead of pushing.")
 @click.option(
@@ -338,7 +342,10 @@ def assemble(
     from oxtend.assemble import assemble as run_assembly
 
     verifier = Verifier(
-        key=verify_key, identity_regexp=identity_regexp, issuer=issuer, allow_unsigned=allow_unsigned
+        key=verify_key,
+        identity_regexp=identity_regexp,
+        issuer=issuer,
+        allow_unsigned=allow_unsigned,
     )
     try:
         result = run_assembly(

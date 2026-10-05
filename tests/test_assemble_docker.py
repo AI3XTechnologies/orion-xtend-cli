@@ -17,7 +17,6 @@ import json
 import os
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 import yaml
@@ -33,7 +32,9 @@ DOCKER = shutil.which("docker")
 
 
 def _docker(*args: str, input_text: str | None = None) -> str:
-    result = subprocess.run([DOCKER, *args], capture_output=True, text=True, input=input_text, timeout=900)
+    result = subprocess.run(
+        [DOCKER, *args], capture_output=True, text=True, input=input_text, timeout=900
+    )
     assert result.returncode == 0, f"docker {' '.join(args)}: {result.stderr[-1500:]}"
     return result.stdout
 
@@ -55,7 +56,9 @@ def published(tmp_path, make_source, manifest):
         _docker("build", "-t", tag, str(ctx))
         _docker("push", tag)
 
-    client = make_source({**manifest, "kind": "client", "scope": "x_acme", "version": "0.3.0", "capabilities": {}})
+    client = make_source(
+        {**manifest, "kind": "client", "scope": "x_acme", "version": "0.3.0", "capabilities": {}}
+    )
     ext = make_source({**manifest, "scope": "x_addon", "version": "1.2.0", "capabilities": {}})
     for src, out in ((client, "x_acme"), (ext, "x_addon")):
         built = build_bundle(src, tmp_path / "built" / out, skip_ui=True)
@@ -97,7 +100,9 @@ def test_assembles_and_pushes_release_images_the_kernel_accepts(published) -> No
         repo, digest = ref.split("@")
         assert repo == f"{REGISTRY}/orion-releases/acme-{target}"
         # The digest reported is the one the registry serves.
-        served = json.loads(_docker("buildx", "imagetools", "inspect", ref, "--format", "{{json .Manifest}}"))
+        served = json.loads(
+            _docker("buildx", "imagetools", "inspect", ref, "--format", "{{json .Manifest}}")
+        )
         assert served["digest"] == digest
 
         _docker("pull", ref)
@@ -117,7 +122,9 @@ def test_assembles_and_pushes_release_images_the_kernel_accepts(published) -> No
 
         # As the kernel's user: everything readable, nothing writable, whatever the bundle's
         # own modes were.
-        unreadable = _docker("run", "--rm", "--user", "1000", ref, "find", "/extensions", "!", "-perm", "-o+r")
+        unreadable = _docker(
+            "run", "--rm", "--user", "1000", ref, "find", "/extensions", "!", "-perm", "-o+r"
+        )
         assert unreadable.strip() == "", f"unreadable by the app user: {unreadable}"
         writable = _docker("run", "--rm", ref, "find", "/extensions", "-perm", "-o+w")
         assert writable.strip() == "", f"writable by the app user: {writable}"
