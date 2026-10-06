@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/AI3XTechnologies/orion-xtend-cli/compare/v0.2.1...v0.2.2) (2026-10-06)
+
+
+### Bug Fixes
+
+* **build:** resolve npm via PATHEXT and skip a current dist, so ui/ bundles build on Windows (D-111) ([#11](https://github.com/AI3XTechnologies/orion-xtend-cli/issues/11)) ([678ec28](https://github.com/AI3XTechnologies/orion-xtend-cli/commit/678ec28eb4c8fb979139435ae675019f696b9f8d))
+
 ## [0.2.1](https://github.com/AI3XTechnologies/orion-xtend-cli/compare/v0.2.0...v0.2.1) (2026-10-05)
 
 
