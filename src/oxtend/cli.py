@@ -44,7 +44,7 @@ from pathlib import Path
 import click
 
 from oxtend import __version__
-from oxtend.build import BuildError, build_bundle
+from oxtend.build import BuildError, ToolingError, build_bundle
 from oxtend.contract_test import run_contract_test
 from oxtend.devloop import (
     DEFAULT_CORE_URL,
@@ -151,6 +151,10 @@ def build(
         bundle = build_bundle(
             ext_dir, out_dir, core_version=installed_core_version(), skip_ui=skip_ui
         )
+    except ToolingError as exc:
+        # A missing toolchain is tooling (exit 2), not an invalid bundle (exit 1).
+        _fail(str(exc), EXIT_TOOLING)
+        return
     except BuildError as exc:
         _fail(str(exc))
         return
@@ -517,6 +521,10 @@ def mount(
 
     try:
         target = sync_bundle(ext_dir, core_dir, skip_ui=skip_ui, core_version=core_version)
+    except ToolingError as exc:
+        # A missing toolchain is tooling (exit 2), not an invalid bundle (exit 1).
+        _fail(str(exc), EXIT_TOOLING)
+        return
     except BuildError as exc:
         _fail(str(exc))
         return
