@@ -56,6 +56,18 @@ class BuildError(RuntimeError):
     pass
 
 
+class ToolingError(BuildError):
+    """A build step could not run because the toolchain is missing, not because the
+    bundle is wrong.
+
+    A subclass of BuildError so every existing ``except BuildError`` still catches it,
+    but the CLI maps it to the documented *tooling* exit code (2 — "cosign absent, no
+    container CLI, core wheel missing") rather than the bundle-is-invalid code (1). A
+    missing Node toolchain is a tooling failure; reporting it as an invalid bundle, or
+    as a bare CreateProcess traceback, is register D-111.
+    """
+
+
 def _run(cmd: list[str], cwd: Path) -> None:
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -64,21 +76,68 @@ def _run(cmd: list[str], cwd: Path) -> None:
         )
 
 
+def _resolve_exe(name: str) -> str:
+    """Absolute path to an executable, so a Windows ``.cmd`` shim resolves.
+
+    ``subprocess.run([name, …])`` on Windows calls CreateProcess, which does NOT consult
+    PATHEXT — so ``npm`` (installed as ``npm.cmd``) raises ``FileNotFoundError:
+    [WinError 2]`` even with Node installed and ``npm.cmd`` on PATH (register D-111).
+    ``shutil.which`` honours PATHEXT and finds the shim; passing its result as argv[0]
+    then runs without a shell.
+    """
+    exe = shutil.which(name)
+    if exe is None:
+        raise ToolingError(
+            f"{name!r} was not found on PATH. Compiling a bundle's ui/ needs a Node "
+            f"toolchain (Node + npm) — install it, or commit a built ui/dist so "
+            f"packaging the bundle does not need Node."
+        )
+    return exe
+
+
+def _ui_dist_is_current(ui_dir: Path) -> bool:
+    """True when ``ui/dist`` exists and no ``ui/`` source is newer than it.
+
+    Lets a bundle that ships a pre-built remote package without a Node toolchain
+    (register D-111): the compile is skipped unless the built output is missing or a
+    source has changed since it was produced. ``dist`` itself and ``node_modules`` are
+    not inputs. Freshness errs toward rebuilding — if any source is newer, or on the
+    microsecond-equal mtimes a fresh git checkout produces, the build runs.
+    """
+    dist = ui_dir / "dist"
+    dist_files = [p for p in dist.rglob("*") if p.is_file()] if dist.is_dir() else []
+    if not dist_files:
+        return False
+    newest_dist = max(p.stat().st_mtime for p in dist_files)
+    for p in ui_dir.rglob("*"):
+        if not p.is_file():
+            continue
+        top = p.relative_to(ui_dir).parts[0]
+        if top in ("dist", "node_modules"):
+            continue
+        if p.stat().st_mtime > newest_dist:
+            return False
+    return True
+
+
 def _compile_ui_remote(ext_dir: Path, out_dir: Path) -> bool:
     """Compile `ui/` into `remotes/`. Absent `ui/` is not an error.
 
     Uses `npm ci` when a lockfile exists: a build tool that resolves fresh versions
     on every run cannot produce a reproducible bundle, which is the point of
-    `oxtend.lock`.
+    `oxtend.lock`. Skips the compile entirely when `ui/dist` is already current, so a
+    bundle carrying a built remote packages without a Node toolchain (register D-111).
     """
     ui_dir = ext_dir / "ui"
     if not ui_dir.is_dir():
         return False
-    if (ui_dir / "package-lock.json").exists():
-        _run(["npm", "ci", "--silent"], cwd=ui_dir)
-    elif not (ui_dir / "node_modules").is_dir():
-        _run(["npm", "install", "--silent"], cwd=ui_dir)
-    _run(["npm", "run", "build", "--silent"], cwd=ui_dir)
+    if not _ui_dist_is_current(ui_dir):
+        npm = _resolve_exe("npm")
+        if (ui_dir / "package-lock.json").exists():
+            _run([npm, "ci", "--silent"], cwd=ui_dir)
+        elif not (ui_dir / "node_modules").is_dir():
+            _run([npm, "install", "--silent"], cwd=ui_dir)
+        _run([npm, "run", "build", "--silent"], cwd=ui_dir)
 
     dist = ui_dir / "dist"
     if not dist.is_dir():
