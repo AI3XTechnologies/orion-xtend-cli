@@ -14,6 +14,6 @@ passes, install fails, and the error surfaces on a customer's cluster.
 
 from __future__ import annotations
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = ["__version__"]
