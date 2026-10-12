@@ -174,3 +174,37 @@ def test_a_bundle_with_both_fields_and_access_validates(make_source, manifest) -
     )
     result = validate_bundle(source)
     assert result.ok, result.errors
+
+
+def test_a_client_config_that_is_not_in_the_bundle_is_an_error(
+    make_source, manifest, tmp_path
+) -> None:
+    """D-66. A client package declaring a config it does not ship installs cleanly and
+    then supplies nothing, so the deployment silently keeps whatever was mounted — the
+    identity failure the provides key exists to remove, one layer up."""
+    client = {
+        **manifest,
+        "kind": "client",
+        "scope": "x_dilmah",
+        "name": "Dilmah",
+        "capabilities": {"events": {"emit": [], "subscribe": []}},
+        "provides": [{"knowledge-hive/client-config": "config/dilmah.yaml"}],
+    }
+    result = validate_bundle(make_source(client))
+    assert not result.ok
+    assert any("knowledge-hive/client-config" in e for e in result.errors), result.errors
+
+
+def test_a_client_that_ships_its_config_validates(make_source, manifest) -> None:
+    client = {
+        **manifest,
+        "kind": "client",
+        "scope": "x_dilmah",
+        "name": "Dilmah",
+        "capabilities": {"events": {"emit": [], "subscribe": []}},
+        "provides": [{"knowledge-hive/client-config": "client.yaml"}],
+    }
+    source = make_source(client)
+    (source / "client.yaml").write_text('client:\n  name: "Dilmah"\n', encoding="utf-8")
+    result = validate_bundle(source)
+    assert result.ok, result.errors
