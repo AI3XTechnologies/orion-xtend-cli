@@ -100,6 +100,20 @@ def _validate_declared_paths(ext_dir: Path, manifest: Any, result: ValidationRes
         result.errors.append(f"provides knowledge-hive/fields: {fields.dir!r} is not in the bundle")
     if (access := manifest.access_provides) and not (ext_dir / access.dir).is_dir():
         result.errors.append(f"provides knowledge-hive/access: {access.dir!r} is not in the bundle")
+    # A client package that declares a config it does not ship installs cleanly and
+    # then supplies nothing, so the deployment silently keeps whatever was mounted —
+    # the identity failure D-66 exists to remove, reintroduced one layer up.
+    #
+    # `getattr`, not `manifest.client_config`: the kernel here is vendored from
+    # whichever orion-backend wheel is installed, and the compat floor admits cores
+    # older than this key. On one of those the attribute is absent, and a bundle that
+    # does not declare the key must still validate rather than crash on the check.
+    if (client_cfg := getattr(manifest, "client_config", None)) and not (
+        ext_dir / client_cfg.file
+    ).is_file():
+        result.errors.append(
+            f"provides knowledge-hive/client-config: {client_cfg.file!r} is not in the bundle"
+        )
     if (payload := manifest.payload_schema) and not (ext_dir / payload.file).is_file():
         result.errors.append(
             f"provides knowledge-hive/payload-schema: {payload.file!r} is not in the bundle"
