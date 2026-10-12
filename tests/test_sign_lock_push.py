@@ -166,3 +166,68 @@ def test_build_ships_the_lock_into_the_bundle(make_source, manifest) -> None:
     write_lock(source, core_version="0.7.0")
     bundle = build_bundle(source, skip_ui=True)
     assert (bundle / "oxtend.lock").is_file()
+
+
+# ---------------------------------------------------------------------------
+# the lock is reproducible, and build honours it (register D-112, D-109)
+# ---------------------------------------------------------------------------
+
+
+def test_relocking_an_untouched_tree_does_not_change_the_bundle_digest(
+    make_source, manifest
+) -> None:
+    """Re-running `oxtend lock` on unchanged source must not change the artifact.
+
+    The lock ships inside the bundle and is hashed into the digest, so a `locked_at`
+    refreshed on every run made "rebuilding a tag six months later produces the same
+    artifact" false for anyone who followed the documented lock-then-build flow.
+    """
+    src = make_source(manifest)
+    write_lock(src, core_version="1.0.0-dev.2")
+    first_locked_at = read_lock(src)["locked_at"]
+    first_digest = json.loads((build_bundle(src, skip_ui=True) / "bundle.json").read_text())[
+        "digest"
+    ]
+
+    write_lock(src, core_version="1.0.0-dev.2")
+    assert read_lock(src)["locked_at"] == first_locked_at
+    second_digest = json.loads((build_bundle(src, skip_ui=True) / "bundle.json").read_text())[
+        "digest"
+    ]
+    assert second_digest == first_digest
+
+
+def test_locked_at_still_moves_when_the_lock_describes_something_new(
+    make_source, manifest
+) -> None:
+    """The carried-over stamp must not become a stamp that never updates — it has to
+    track the content it describes, or it is worse than having none."""
+    src = make_source(manifest)
+    write_lock(src, core_version="1.0.0-dev.2")
+    first = read_lock(src)["locked_at"]
+    write_lock(src, core_version="1.0.0-dev.3")
+    second = read_lock(src)
+    assert second["locked_at"] != first
+    assert second["core"]["resolved_version"] == "1.0.0-dev.3"
+
+
+def test_build_require_lock_stamps_the_locks_core_version_not_the_installed_one(
+    make_source, manifest, monkeypatch
+) -> None:
+    """`build --require-lock` must not overwrite the lock's resolved core version with
+    whatever core happens to be installed on the build host — that makes the bundle
+    contradict the lock it ships, which is the lock's whole purpose."""
+    from click.testing import CliRunner
+
+    from oxtend.cli import cli
+
+    src = make_source(manifest)
+    write_lock(src, core_version="1.0.0-dev.2")
+    monkeypatch.setattr("oxtend.cli.installed_core_version", lambda: "1.0.0-dev.9")
+
+    result = CliRunner().invoke(cli, ["build", str(src), "--require-lock", "--skip-ui"])
+    assert result.exit_code == 0, result.output
+
+    bundle = src / "build" / f"{manifest['scope']}-{manifest['version']}"
+    meta = json.loads((bundle / "bundle.json").read_text())
+    assert meta["built_against_core"] == "1.0.0-dev.2"

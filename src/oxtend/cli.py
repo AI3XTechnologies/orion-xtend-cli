@@ -59,7 +59,7 @@ from oxtend.devloop import (
     sync_bundle,
     touches_ui,
 )
-from oxtend.lock import lock_is_current, write_lock
+from oxtend.lock import lock_is_current, read_lock, write_lock
 from oxtend.manifest_vendored import (
     VendoredKernelUnavailable,
     installed_core_version,
@@ -143,14 +143,24 @@ def build(
 ) -> None:
     """Compile the UI remote and assemble the bundle directory."""
     ctx.invoke(validate, ext_dir=ext_dir, core_version=None)
+    # Without a lock the installed core is the only answer available. With one, the
+    # lock's resolved version is the authority: it is what the bundle was contract-
+    # tested against, and stamping the build host's installed core over it makes the
+    # artifact contradict the lock it ships (register D-109).
+    core_version = installed_core_version()
     if require_lock:
         ok, reason = lock_is_current(ext_dir)
         if not ok:
             _fail(reason)
+        locked_core = (read_lock(ext_dir) or {}).get("core", {}).get("resolved_version")
+        if locked_core and locked_core != core_version:
+            _warn(
+                f"building against the lock's core {locked_core}, not the installed "
+                f"{core_version} — re-run `oxtend lock` if the lock is the stale one"
+            )
+        core_version = locked_core or core_version
     try:
-        bundle = build_bundle(
-            ext_dir, out_dir, core_version=installed_core_version(), skip_ui=skip_ui
-        )
+        bundle = build_bundle(ext_dir, out_dir, core_version=core_version, skip_ui=skip_ui)
     except ToolingError as exc:
         # A missing toolchain is tooling (exit 2), not an invalid bundle (exit 1).
         _fail(str(exc), EXIT_TOOLING)

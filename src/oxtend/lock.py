@@ -69,7 +69,15 @@ def _ui_dependency_tree(ext_dir: Path) -> dict[str, Any]:
 
 
 def write_lock(ext_dir: Path, *, core_version: str | None = None) -> Path:
-    """Write `<ext_dir>/oxtend.lock` and return its path."""
+    """Write `<ext_dir>/oxtend.lock` and return its path.
+
+    `locked_at` is carried over from an existing lock whose substantive content is
+    unchanged. The lock ships inside the bundle and is therefore hashed into the
+    bundle digest, so a wall-clock stamp refreshed on every run would make re-locking
+    an untouched tree produce a different artifact — the opposite of what the lock
+    exists to guarantee (register D-112). The stamp still moves whenever anything it
+    describes moves, which is the only time it carries information.
+    """
     ext_dir = Path(ext_dir)
     manifest = kernel_manifest_module().load_manifest(ext_dir)
     payload = {
@@ -82,8 +90,16 @@ def write_lock(ext_dir: Path, *, core_version: str | None = None) -> Path:
             "resolved_version": core_version or installed_core_version(),
         },
         "ui": _ui_dependency_tree(ext_dir),
-        "locked_at": datetime.now(UTC).isoformat(),
     }
+    previous = read_lock(ext_dir)
+    unchanged = previous is not None and {
+        k: v for k, v in previous.items() if k != "locked_at"
+    } == payload
+    payload["locked_at"] = (
+        previous["locked_at"]
+        if unchanged and previous.get("locked_at")
+        else datetime.now(UTC).isoformat()
+    )
     path = ext_dir / LOCK_FILENAME
     path.write_text(yaml.safe_dump(payload, sort_keys=True))
     return path
