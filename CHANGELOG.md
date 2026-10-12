@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/AI3XTechnologies/orion-xtend-cli/compare/v0.2.1...v0.3.0) (2026-10-12)
+
+
+### Features
+
+* **validate:** check a declared client config is in the bundle (D-66) ([19a56db](https://github.com/AI3XTechnologies/orion-xtend-cli/commit/19a56db0b10e284228692b1faa35a1aab67be699))
+* **validate:** check a declared client config is in the bundle (D-66) ([38e2851](https://github.com/AI3XTechnologies/orion-xtend-cli/commit/38e28511416862bd0358cafed300060256a599da))
+
+
+### Bug Fixes
+
+* **build:** resolve npm via PATHEXT and skip a current dist, so ui/ bundles build on Windows (D-111) ([#11](https://github.com/AI3XTechnologies/orion-xtend-cli/issues/11)) ([678ec28](https://github.com/AI3XTechnologies/orion-xtend-cli/commit/678ec28eb4c8fb979139435ae675019f696b9f8d))
+* **lock:** make the lock reproducible and let it decide the core version (D-112, D-109) ([522743f](https://github.com/AI3XTechnologies/orion-xtend-cli/commit/522743f1a26388e0f0f919b626b4b46db73877db))
+* **lock:** make the lock reproducible and let it decide the core version (D-112, D-109) ([ab2d87b](https://github.com/AI3XTechnologies/orion-xtend-cli/commit/ab2d87b0d0a849b658a8f1c7cb7410fdbdc8656a))
+
 ## [0.2.1](https://github.com/AI3XTechnologies/orion-xtend-cli/compare/v0.2.0...v0.2.1) (2026-10-05)
 
 
